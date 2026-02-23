@@ -1,1 +1,1 @@
-{"kind":"coord_node","node_id":"node-ecd19d5e-a11d-4a07-adcf-2373c7e33508","url":"http://127.0.0.1:52533","local_url":"http://127.0.0.1:52533","port":52533,"updated_at_utc":"2026-02-23T22:42:09.279913+00:00","version":"1.0"}
+{"kind":"coord_node","node_id":"node-ecd19d5e-a11d-4a07-adcf-2373c7e33508","url":"https://e63c068d96f958.lhr.life","local_url":"http://127.0.0.1:51532","port":51532,"updated_at_utc":"2026-02-23T22:50:30.322756+00:00","version":"1.1","tunnel":{"type":"localhost.run"}}
