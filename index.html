@@ -21,11 +21,11 @@
       box-shadow: 0 8px 24px rgba(0,0,0,0.35);
       backdrop-filter: blur(8px);
       -webkit-backdrop-filter: blur(8px);
-      max-width: 420px;
+      max-width: 460px;
     }
     .panel h3 { margin: 0 0 8px 0; font-size: 14px; opacity: 0.9; }
     .row { display:flex; gap:8px; align-items:center; margin-top:8px; flex-wrap: wrap; }
-    input, button, select {
+    input, button {
       background: rgba(255,255,255,0.06);
       border: 1px solid rgba(255,255,255,0.10);
       color: #e7eef7;
@@ -72,10 +72,14 @@
   <canvas id="c"></canvas>
 
   <div id="ui">
-    <div class="panel" style="min-width:340px;">
+    <div class="panel" style="min-width:360px;">
       <h3>Auto Lobby (serverless P2P)</h3>
       <small>
-        This uses Trystero to discover peers without you running a server. If torrent trackers are blocked, it auto-falls back to Nostr relays.
+        Trystero discovers peers using public infrastructure (no server you run).
+        If torrent trackers are blocked, it falls back to Nostr relays.
+        <br/><br/>
+        <b>Important:</b> Rotating STUN helps reliability a bit, but it will NOT beat hard ISP/firewall blocking.
+        If your ISP blocks WebRTC paths, you need <b>TURN relay</b> (not truly free/unlimited).
       </small>
 
       <div class="row">
@@ -91,14 +95,10 @@
 
       <div class="row">
         <span id="strategyBadge" class="pill">Strategy: …</span>
-        <span id="relayBadge" class="pill">Relays: …</span>
+        <span id="relayBadge" class="pill">Bootstrap: …</span>
       </div>
 
       <small id="status" style="margin-top:8px;">Connecting…</small>
-      <small style="margin-top:6px;">
-        If you see “WebSocket connection failed” in console, your network may block WebTorrent trackers.
-        The fallback helps, but some networks block all P2P bootstraps without TURN.
-      </small>
     </div>
 
     <div class="panel" style="min-width:260px;">
@@ -113,7 +113,7 @@
   <div id="toast"></div>
 
   <script type="module">
-    // Use esm.run as recommended in Trystero README for CDN module import. :contentReference[oaicite:4]{index=4}
+    // CDN imports (browser ESM)
     import { joinRoom as joinRoomTorrent } from "https://esm.run/trystero/torrent";
     import { joinRoom as joinRoomNostr } from "https://esm.run/trystero/nostr";
 
@@ -160,6 +160,8 @@
       }[c]));
     }
 
+    function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
     /********************************************************************
      * 1) Canvas + world
      ********************************************************************/
@@ -179,7 +181,7 @@
     const WORLD = { w: 4500, h: 4500 };
 
     const my = {
-      id: crypto.randomUUID(),
+      id: crypto.randomUUID(),     // stable per tab
       name: "anon",
       color: randomColor(),
       x: WORLD.w * 0.5,
@@ -192,7 +194,9 @@
       lastSentAt: 0,
     };
 
-    const remotes = new Map(); // peerId -> {state}
+    const remotes = new Map(); // peerId -> { state }
+
+    // deterministic pellets per room, plus shared removals via events
     const PELLET_COUNT = 800;
     let pellets = [];
     let removedPellets = new Set();
@@ -271,7 +275,42 @@
     }
 
     /********************************************************************
-     * 3) Trystero networking (torrent -> nostr fallback)
+     * 3) ICE servers (STUN rotation)
+     *
+     * This helps when STUN endpoints are flaky.
+     * It DOES NOT bypass hard blocking; TURN is required for that.
+     ********************************************************************/
+    const ICE_SERVERS = [
+      // Cloudflare STUN (generally reliable):
+      { urls: ["stun:stun.cloudflare.com:3478"] },
+
+      // Google STUNs (common):
+      { urls: ["stun:stun.l.google.com:19302"] },
+      { urls: ["stun:stun1.l.google.com:19302"] },
+      { urls: ["stun:stun2.l.google.com:19302"] },
+
+      // OPTIONAL: add more STUNs if you want, but keep it small and reputable.
+      // Too many slows ICE and increases failure surface.
+    ];
+
+    // OPTIONAL TURN (REAL FIX for hostile networks):
+    // Put YOUR TURN provider credentials here (TURN is a relay; someone must pay bandwidth).
+    // const TURN_SERVERS = [
+    //   {
+    //     urls: [
+    //       "turns:YOUR_TURN_HOST:443?transport=tcp",
+    //       "turn:YOUR_TURN_HOST:80?transport=tcp"
+    //     ],
+    //     username: "YOUR_USERNAME",
+    //     credential: "YOUR_PASSWORD"
+    //   }
+    // ];
+    //
+    // If you add TURN_SERVERS, then set:
+    // const ICE_SERVERS = [...ICE_SERVERS, ...TURN_SERVERS];
+
+    /********************************************************************
+     * 4) Trystero networking (torrent -> nostr fallback)
      ********************************************************************/
     let room = null;
     let stopNetLoop = null;
@@ -298,20 +337,12 @@
       sendPlayerEaten = onPlayerEaten = null;
     }
 
-    // IMPORTANT: Trystero supports relayUrls / relayRedundancy / turnConfig etc. :contentReference[oaicite:5]{index=5}
-    // We'll keep this "zero-cost" and avoid TURN.
-
+    // WebTorrent trackers (bootstrap relays). If your ISP blocks these websockets, torrent strategy fails.
     const TORRENT_RELAYS = [
-      // These are the common WebTorrent WebSocket trackers.
-      // If your network blocks them, torrent strategy will fail and we'll fall back.
       "wss://tracker.openwebtorrent.com",
       "wss://tracker.btorrent.xyz",
-      // A third public tracker exists and often works, but some clients report differing behavior:
-      // "wss://tracker.webtorrent.dev"
+      // "wss://tracker.webtorrent.dev", // optional (sometimes works, sometimes blocked)
     ];
-
-    // For Nostr we rely on Trystero’s defaults (keeps the file shorter).
-    // You can optionally pass relayUrls for Nostr too via config.relayUrls. :contentReference[oaicite:6]{index=6}
 
     async function join(roomId) {
       teardownRoom();
@@ -321,19 +352,17 @@
 
       my.name = (UI.name.value || "anon").trim().slice(0, 18);
 
-      setStatus("Connecting (torrent)…");
       setStrategyBadge("torrent", false);
-      setRelayBadge("Relays: connecting…", false);
+      setRelayBadge("Bootstrap: torrent trackers…", false);
+      setStatus("Connecting (torrent)…");
 
-      // Try torrent first
       const ok = await tryJoinTorrent(roomId);
 
       if (!ok) {
-        // Fallback
         toast("Torrent trackers blocked/unreachable → switching to Nostr fallback");
-        setStatus("Connecting (nostr fallback)…");
         setStrategyBadge("nostr (fallback)", true);
-        setRelayBadge("Relays: using public Nostr relays", true);
+        setRelayBadge("Bootstrap: Nostr relays…", true);
+        setStatus("Connecting (nostr fallback)…");
 
         teardownRoom();
         await tryJoinNostr(roomId);
@@ -344,38 +373,30 @@
       let joinError = null;
 
       const config = {
-        appId: "p2p-agar-demo-v2",
+        appId: "p2p-agar-demo-v3",
         relayUrls: TORRENT_RELAYS,
-        // relayRedundancy is ignored if relayUrls is provided. :contentReference[oaicite:7]{index=7}
-        // relayRedundancy: 3,
+        rtcConfig: { iceServers: ICE_SERVERS }, // important: STUN list here
       };
 
-      // joinRoom signature supports onJoinError callback. :contentReference[oaicite:8]{index=8}
       room = joinRoomTorrent(config, roomId, (err) => {
         joinError = err || new Error("Unknown join error");
       });
 
-      wireRoomCommon(roomId);
+      wireRoomCommon();
 
-      // Wait briefly to see if at least 1 relay connection succeeds.
-      // If WebSockets are blocked, you'll see the exact error you pasted.
+      // Wait a moment; if trackers are blocked, joinError usually fires quickly.
       const deadline = performance.now() + 4500;
       while (performance.now() < deadline) {
         if (joinError) break;
-
-        // If at least one peer connects, we're good.
-        // (In an empty room, you might still have zero peers, so we also accept “no joinError by deadline”.)
         await sleep(150);
       }
 
       if (joinError) {
-        setRelayBadge("Relays: failed (torrent)", true);
+        setRelayBadge("Bootstrap: torrent failed", true);
         return false;
       }
 
-      // We can’t perfectly detect relay success without internal hooks,
-      // but if we got no error, proceed.
-      setRelayBadge(`Relays: ${TORRENT_RELAYS.length} configured`, false);
+      setRelayBadge(`Bootstrap: torrent (${TORRENT_RELAYS.length} trackers configured)`, false);
       setStatus(`In lobby: ${roomId} (torrent) — move mouse to steer; eat pellets/players`);
       broadcastHello();
       toast("Connected (torrent)");
@@ -383,18 +404,20 @@
     }
 
     async function tryJoinNostr(roomId) {
-      const config = { appId: "p2p-agar-demo-v2" };
-      room = joinRoomNostr(config, roomId);
+      const config = {
+        appId: "p2p-agar-demo-v3",
+        rtcConfig: { iceServers: ICE_SERVERS }, // important: STUN list here too
+      };
 
-      wireRoomCommon(roomId);
+      room = joinRoomNostr(config, roomId);
+      wireRoomCommon();
 
       setStatus(`In lobby: ${roomId} (nostr fallback) — move mouse to steer; eat pellets/players`);
       broadcastHello();
       toast("Connected (nostr fallback)");
     }
 
-    function wireRoomCommon(roomId) {
-      // Peer join/leave
+    function wireRoomCommon() {
       room.onPeerJoin((peerId) => {
         remotes.set(peerId, remotes.get(peerId) || {
           peerId,
@@ -418,7 +441,6 @@
         toast(`Peer left: ${peerId.slice(0,6)}`);
       });
 
-      // Actions
       [sendHello, onHello] = room.makeAction("hello");
       [sendPing, onPing] = room.makeAction("ping");
       [sendState, onState] = room.makeAction("state");
@@ -488,7 +510,7 @@
 
     function broadcastHello() {
       if (!sendHello) return;
-      sendHello({ myId: my.id, name: my.name, color: my.color, alive: my.alive, v: 2 });
+      sendHello({ myId: my.id, name: my.name, color: my.color, alive: my.alive, v: 3 });
     }
 
     function startNetworkLoops() {
@@ -513,10 +535,8 @@
       };
     }
 
-    function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
-
     /********************************************************************
-     * 4) Game mechanics (Agar-like)
+     * 5) Game mechanics (Agar-like)
      ********************************************************************/
     let mouse = { x: window.innerWidth/2, y: window.innerHeight/2 };
     window.addEventListener("mousemove", (e) => { mouse.x = e.clientX; mouse.y = e.clientY; });
@@ -581,7 +601,7 @@
     }
 
     /********************************************************************
-     * 5) Render
+     * 6) Render
      ********************************************************************/
     function draw() {
       const w = window.innerWidth, h = window.innerHeight;
@@ -687,7 +707,7 @@
     }
 
     /********************************************************************
-     * 6) Main loop
+     * 7) Main loop
      ********************************************************************/
     let last = performance.now();
 
@@ -744,14 +764,14 @@
     }
 
     /********************************************************************
-     * 7) Boot
+     * 8) Boot
      ********************************************************************/
     (function boot() {
       my.name = (UI.name.value || "anon").trim().slice(0, 18);
       const roomId = (UI.room.value || "p2p-agar").trim();
 
-      setRelayBadge("Relays: …", false);
       setStrategyBadge("…", false);
+      setRelayBadge("Bootstrap: …", false);
 
       join(roomId);
 
