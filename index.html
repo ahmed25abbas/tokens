@@ -407,7 +407,8 @@
       init(roomId) {
         this.roomId = roomId;
         this.initialized = true;
-        this.updateStatus('Initializing all strategies...');
+        this.updateStrategyStatus('global', 'Initializing all strategies...', '#3b82f6');
+        UI.status.textContent = 'Initializing all strategies...';
         this.startAllStrategies();
       }
 
@@ -424,7 +425,9 @@
       updateSignalingStatus() {
         const lines = [];
         for (const [strategy, status] of this.strategyStatus) {
-          lines.push(`${strategy}: ${status}`);
+          if (strategy !== 'global') {
+            lines.push(`${strategy}: ${status}`);
+          }
         }
         UI.signalingStatus.value = lines.join('\n');
       }
@@ -550,10 +553,12 @@
           this.bestStrategy = succeeded[0].value.strategy;
           UI.activeStrategy.textContent = `Active: ${this.bestStrategy}`;
           UI.activeStrategy.className = 'pill success';
+          UI.status.textContent = `Connected via ${this.bestStrategy}`;
           toast(`✅ Connected via ${this.bestStrategy}`, 2000, 'success');
         } else {
           UI.activeStrategy.textContent = 'Active: none';
           UI.activeStrategy.className = 'pill error';
+          UI.status.textContent = 'All strategies failed';
           toast('❌ All strategies failed', 3000, 'error');
         }
       }
@@ -698,6 +703,10 @@
             this.handlePeerJoined('mqtt', peerId);
           });
 
+          room.onPeerLeave((peerId) => {
+            this.handlePeerLeft(peerId);
+          });
+
           const [sendHello, onHello] = room.makeAction('hello');
           const [sendState, onState] = room.makeAction('state');
 
@@ -748,6 +757,10 @@
             this.handlePeerJoined('firebase', peerId);
           });
 
+          room.onPeerLeave((peerId) => {
+            this.handlePeerLeft(peerId);
+          });
+
           const [sendHello, onHello] = room.makeAction('hello');
           const [sendState, onState] = room.makeAction('state');
 
@@ -795,6 +808,10 @@
           
           room.onPeerJoin((peerId) => {
             this.handlePeerJoined('ipfs', peerId);
+          });
+
+          room.onPeerLeave((peerId) => {
+            this.handlePeerLeft(peerId);
           });
 
           const [sendHello, onHello] = room.makeAction('hello');
@@ -931,11 +948,6 @@
           });
 
           this.activeConnections.set('peerjs', peer);
-
-          // Connect to any existing peers (simplified - in production you'd need peer discovery)
-          setTimeout(() => {
-            // Broadcast via other strategies instead
-          }, 2000);
 
           return { strategy: 'peerjs', peer };
         } catch (e) {
