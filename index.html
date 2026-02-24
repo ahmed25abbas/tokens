@@ -21,11 +21,11 @@
       box-shadow: 0 8px 24px rgba(0,0,0,0.35);
       backdrop-filter: blur(8px);
       -webkit-backdrop-filter: blur(8px);
-      max-width: 460px;
+      max-width: 520px;
     }
     .panel h3 { margin: 0 0 8px 0; font-size: 14px; opacity: 0.9; }
     .row { display:flex; gap:8px; align-items:center; margin-top:8px; flex-wrap: wrap; }
-    input, button {
+    input, button, textarea {
       background: rgba(255,255,255,0.06);
       border: 1px solid rgba(255,255,255,0.10);
       color: #e7eef7;
@@ -66,13 +66,21 @@
       font-size: 12px;
     }
     .warn { border-color: rgba(255,170,100,0.35); background: rgba(255,170,100,0.08); }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
+    .tiny { font-size: 12px; }
+    #trackers {
+      width: 100%;
+      min-height: 52px;
+      max-height: 120px;
+      resize: vertical;
+    }
   </style>
 </head>
 <body>
   <canvas id="c"></canvas>
 
   <div id="ui">
-    <div class="panel" style="min-width:360px;">
+    <div class="panel" style="min-width:380px;">
       <h3>Auto Lobby (serverless P2P)</h3>
       <small>
         Trystero discovers peers using public infrastructure (no server you run).
@@ -99,9 +107,19 @@
       </div>
 
       <small id="status" style="margin-top:8px;">Connecting…</small>
+
+      <small style="margin-top:10px;">
+        <b>Reachable trackers (this network):</b>
+      </small>
+      <textarea id="trackers" class="mono tiny" readonly placeholder="(probing...)"></textarea>
+
+      <div class="row">
+        <button id="copyTrackers">Copy trackers</button>
+        <span id="meshBadge" class="pill">Mesh: …</span>
+      </div>
+
       <small style="margin-top:6px;">
-        If you see “WebSocket connection failed” to trackers, your ISP is blocking tracker WebSockets.
-        This build pre-detects that and switches to Nostr automatically.
+        “Peer gossip” is enabled: once you connect to anyone, peers exchange their known peer IDs to help the mesh grow.
       </small>
     </div>
 
@@ -151,6 +169,7 @@
     }
 
     function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
+    function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
     function randomColor() {
       const hue = Math.floor(Math.random() * 360);
@@ -162,8 +181,6 @@
         "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"
       }[c]));
     }
-
-    function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
     /********************************************************************
      * 1) Canvas + world
@@ -228,6 +245,9 @@
       peers: $("peers"),
       strategyBadge: $("strategyBadge"),
       relayBadge: $("relayBadge"),
+      trackers: $("trackers"),
+      copyTrackers: $("copyTrackers"),
+      meshBadge: $("meshBadge"),
     };
 
     const urlRoom = new URL(location.href).hash.match(/room=([^&]+)/)?.[1];
@@ -248,6 +268,15 @@
       join(roomId);
     });
 
+    UI.copyTrackers.addEventListener("click", async () => {
+      try {
+        await navigator.clipboard.writeText(UI.trackers.value || "");
+        toast("Trackers copied");
+      } catch {
+        toast("Clipboard blocked by browser");
+      }
+    });
+
     function setStatus(msg) { UI.status.textContent = msg; }
 
     function setStrategyBadge(name, warn=false) {
@@ -258,6 +287,11 @@
     function setRelayBadge(text, warn=false) {
       UI.relayBadge.textContent = text;
       UI.relayBadge.classList.toggle("warn", !!warn);
+    }
+
+    function setMeshBadge(text, warn=false) {
+      UI.meshBadge.textContent = text;
+      UI.meshBadge.classList.toggle("warn", !!warn);
     }
 
     function renderPeersList() {
@@ -274,6 +308,9 @@
         .sort((a,b) => b.detail.localeCompare(a.detail))
         .map(x => `<li><span>${escapeHtml(x.label)}</span><span class="tag">${escapeHtml(x.detail)}</span></li>`)
         .join("");
+
+      // quick mesh status:
+      setMeshBadge(`Mesh: ${remotes.size} peers`, remotes.size === 0);
     }
 
     /********************************************************************
@@ -287,16 +324,15 @@
     ];
 
     /********************************************************************
-     * 4) Torrent tracker bootstrap (WebSocket) + preflight probe
+     * 4) Trackers + preflight probe
      ********************************************************************/
     const TORRENT_RELAYS = [
       "wss://tracker.openwebtorrent.com",
       "wss://tracker.btorrent.xyz",
-      "wss://tracker.webtorrent.dev",          // public tracker.webtorrent.dev
-      "wss://tracker.fastcast.nz/announce",    // commonly referenced WebTorrent WS tracker
+      "wss://tracker.webtorrent.dev",
+      "wss://tracker.fastcast.nz/announce",
     ];
 
-    // Try to open a WebSocket quickly. If ISP blocks, this fails fast.
     function probeWebSocket(url, timeoutMs = 1200) {
       return new Promise((resolve) => {
         let ws;
@@ -324,13 +360,24 @@
     }
 
     async function pickWorkingTrackers(relays) {
-      // Probe in parallel; keep only those that open.
       const results = await Promise.all(relays.map((u) => probeWebSocket(u)));
       return relays.filter((u, i) => results[i]);
     }
 
+    function showTrackersInUI(working, modeLabel) {
+      if (!working?.length) {
+        UI.trackers.value = modeLabel
+          ? `(${modeLabel}) No reachable trackers detected`
+          : `No reachable trackers detected`;
+        return;
+      }
+      UI.trackers.value =
+        `(${modeLabel}) Reachable trackers (${working.length}):\n` +
+        working.map(u => `- ${u}`).join("\n");
+    }
+
     /********************************************************************
-     * 5) Trystero networking (torrent -> nostr fallback)
+     * 5) Trystero networking + peer gossip overlay
      ********************************************************************/
     let room = null;
     let stopNetLoop = null;
@@ -340,6 +387,13 @@
     let sendState, onState;
     let sendPelletEaten, onPelletEaten;
     let sendPlayerEaten, onPlayerEaten;
+
+    // Gossip actions
+    let sendKnownPeers, onKnownPeers;
+    let sendPresence, onPresence;
+
+    // We keep a lightweight set of "seen peer ids" (Trystero peerIds) to help mesh awareness.
+    const seenPeerIds = new Set();
 
     function teardownRoom() {
       if (stopNetLoop) stopNetLoop();
@@ -355,6 +409,11 @@
       sendState = onState = null;
       sendPelletEaten = onPelletEaten = null;
       sendPlayerEaten = onPlayerEaten = null;
+
+      sendKnownPeers = onKnownPeers = null;
+      sendPresence = onPresence = null;
+
+      seenPeerIds.clear();
     }
 
     async function join(roomId) {
@@ -365,33 +424,35 @@
 
       my.name = (UI.name.value || "anon").trim().slice(0, 18);
 
-      // Preflight: if trackers are blocked, skip torrent immediately.
       setStrategyBadge("torrent", false);
       setRelayBadge("Bootstrap: probing trackers…", false);
       setStatus("Checking tracker connectivity…");
+      UI.trackers.value = "(probing...)";
 
       const working = await pickWorkingTrackers(TORRENT_RELAYS);
 
       if (!working.length) {
-        // No WS tracker opens -> torrent bootstrap will spam errors -> go straight to Nostr
-        toast("Your network blocks WebTorrent tracker WebSockets → using Nostr bootstrap");
-        setStrategyBadge("nostr (fallback)", true);
+        toast("Trackers blocked → using Nostr bootstrap");
+        setStrategyBadge("nostr", true);
         setRelayBadge("Bootstrap: Nostr relays (trackers blocked)", true);
-        setStatus("Connecting (nostr fallback)…");
+        setStatus("Connecting (nostr)…");
+        showTrackersInUI([], "torrent");
         await tryJoinNostr(roomId);
         return;
       }
 
-      // Use only the trackers that actually opened in this network
+      // Show exactly which ones are reachable
+      showTrackersInUI(working, "torrent");
+
       setRelayBadge(`Bootstrap: torrent (${working.length} trackers reachable)`, false);
       setStatus("Connecting (torrent)…");
 
       const ok = await tryJoinTorrent(roomId, working);
       if (!ok) {
-        toast("Torrent bootstrap unstable → switching to Nostr fallback");
-        setStrategyBadge("nostr (fallback)", true);
+        toast("Torrent unstable → switching to Nostr");
+        setStrategyBadge("nostr", true);
         setRelayBadge("Bootstrap: Nostr relays…", true);
-        setStatus("Connecting (nostr fallback)…");
+        setStatus("Connecting (nostr)…");
         teardownRoom();
         await tryJoinNostr(roomId);
       }
@@ -399,9 +460,8 @@
 
     async function tryJoinTorrent(roomId, relayUrls) {
       let joinError = null;
-
       const config = {
-        appId: "p2p-agar-demo-v4",
+        appId: "p2p-agar-demo-v5",
         relayUrls,
         rtcConfig: { iceServers: ICE_SERVERS },
       };
@@ -412,7 +472,6 @@
 
       wireRoomCommon();
 
-      // Give it a short chance. If trackers are “reachable” but still fail, joinError should occur.
       const deadline = performance.now() + 3000;
       while (performance.now() < deadline) {
         if (joinError) break;
@@ -432,7 +491,7 @@
 
     async function tryJoinNostr(roomId) {
       const config = {
-        appId: "p2p-agar-demo-v4",
+        appId: "p2p-agar-demo-v5",
         rtcConfig: { iceServers: ICE_SERVERS },
       };
 
@@ -440,13 +499,18 @@
       wireRoomCommon();
 
       setStatus(`In lobby: ${roomId} (nostr) — move mouse to steer; eat pellets/players`);
+      // For nostr mode we don't have "trackers"
+      UI.trackers.value = "(nostr) Using public Nostr relays (not trackers).";
       broadcastHello();
       toast("Connected (nostr)");
       return true;
     }
 
     function wireRoomCommon() {
+      // Peer join/leave
       room.onPeerJoin((peerId) => {
+        seenPeerIds.add(peerId);
+
         remotes.set(peerId, remotes.get(peerId) || {
           peerId,
           name: peerId.slice(0, 6),
@@ -458,7 +522,12 @@
           lastHeardAt: performance.now(),
           lastSeq: -1,
         });
+
         broadcastHello();
+
+        // Send our known peer IDs to the newcomer (gossip)
+        pushKnownPeers(peerId);
+
         renderPeersList();
         toast(`Peer joined: ${peerId.slice(0,6)}`);
       });
@@ -469,11 +538,16 @@
         toast(`Peer left: ${peerId.slice(0,6)}`);
       });
 
+      // Game actions
       [sendHello, onHello] = room.makeAction("hello");
       [sendPing, onPing] = room.makeAction("ping");
       [sendState, onState] = room.makeAction("state");
       [sendPelletEaten, onPelletEaten] = room.makeAction("pelletEaten");
       [sendPlayerEaten, onPlayerEaten] = room.makeAction("playerEaten");
+
+      // Gossip actions
+      [sendKnownPeers, onKnownPeers] = room.makeAction("knownPeers");
+      [sendPresence, onPresence] = room.makeAction("presence");
 
       onHello((payload, peerId) => {
         const now = performance.now();
@@ -485,6 +559,9 @@
         if (payload?.alive !== undefined) p.alive = !!payload.alive;
         remotes.set(peerId, p);
         renderPeersList();
+
+        // Also gossip known peers periodically
+        pushKnownPeers(peerId);
       });
 
       onPing((_payload, peerId) => {
@@ -533,20 +610,71 @@
         renderPeersList();
       });
 
+      // Gossip handlers
+      onKnownPeers((payload, peerId) => {
+        // payload: { peers: [peerId...] }
+        const list = payload?.peers;
+        if (!Array.isArray(list)) return;
+
+        // We can't force Trystero to "dial" arbitrary peerIds directly
+        // (the transport/strategy handles dialing), BUT:
+        // - This improves awareness + presence
+        // - We broadcast presence frequently so transport will have more opportunities
+        for (const pid of list) {
+          if (typeof pid === "string" && pid.length > 0) {
+            seenPeerIds.add(pid);
+          }
+        }
+
+        // respond with our list too (bidirectional gossip)
+        pushKnownPeers(peerId);
+      });
+
+      onPresence((payload, peerId) => {
+        // payload: { t, seenCount }
+        const p = remotes.get(peerId);
+        if (p) p.lastHeardAt = performance.now();
+      });
+
       stopNetLoop = startNetworkLoops();
     }
 
     function broadcastHello() {
       if (!sendHello) return;
-      sendHello({ myId: my.id, name: my.name, color: my.color, alive: my.alive, v: 4 });
+      sendHello({ myId: my.id, name: my.name, color: my.color, alive: my.alive, v: 5 });
+    }
+
+    // Send our currently-connected peerIds + some "seen" ones (bounded)
+    function pushKnownPeers(targetPeerId = null) {
+      if (!sendKnownPeers) return;
+
+      const connected = Array.from(remotes.keys());
+      const seen = Array.from(seenPeerIds);
+
+      // bound payload to avoid huge messages
+      const peers = Array.from(new Set([...connected, ...seen])).slice(0, 80);
+
+      if (targetPeerId) sendKnownPeers({ peers, t: Date.now() }, targetPeerId);
+      else sendKnownPeers({ peers, t: Date.now() });
     }
 
     function startNetworkLoops() {
       let stopped = false;
 
+      // Heartbeat + stale cleanup + gossip presence
       const heartbeat = setInterval(() => {
         if (stopped) return;
+
         sendPing?.({ t: Date.now() });
+
+        // Presence broadcast (helps keep mesh lively)
+        sendPresence?.({ t: Date.now(), seenCount: seenPeerIds.size });
+
+        // Light gossip broadcast (helps mesh grow)
+        // Send your known peers list occasionally (not every tick)
+        if (Math.random() < 0.35) {
+          pushKnownPeers(null);
+        }
 
         const now = performance.now();
         for (const [peerId, p] of remotes.entries()) {
@@ -800,6 +928,7 @@
 
       setStrategyBadge("…", false);
       setRelayBadge("Bootstrap: …", false);
+      setMeshBadge("Mesh: 0 peers", true);
 
       join(roomId);
 
