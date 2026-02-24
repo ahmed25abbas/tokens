@@ -21,10 +21,10 @@
       box-shadow: 0 8px 24px rgba(0,0,0,0.35);
       backdrop-filter: blur(8px);
       -webkit-backdrop-filter: blur(8px);
-      max-width: 380px;
+      max-width: 420px;
     }
     .panel h3 { margin: 0 0 8px 0; font-size: 14px; opacity: 0.9; }
-    .row { display:flex; gap:8px; align-items:center; margin-top:8px; }
+    .row { display:flex; gap:8px; align-items:center; margin-top:8px; flex-wrap: wrap; }
     input, button, select {
       background: rgba(255,255,255,0.06);
       border: 1px solid rgba(255,255,255,0.10);
@@ -34,10 +34,10 @@
       outline: none;
       font-size: 13px;
     }
-    input { flex: 1; min-width: 120px; }
+    input { flex: 1; min-width: 140px; }
     button { cursor: pointer; }
     button:hover { background: rgba(255,255,255,0.10); }
-    small { opacity: 0.75; line-height: 1.25; display:block; }
+    small { opacity: 0.78; line-height: 1.25; display:block; }
     #peers { margin: 8px 0 0 0; padding: 0; list-style: none; max-height: 220px; overflow:auto; }
     #peers li { padding: 6px 6px; border-radius: 8px; display:flex; justify-content: space-between; gap:10px; }
     #peers li:nth-child(odd) { background: rgba(255,255,255,0.04); }
@@ -51,36 +51,61 @@
       padding: 10px 14px;
       box-shadow: 0 10px 28px rgba(0,0,0,0.45);
       display:none;
+      z-index: 10;
+      max-width: 92vw;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
     canvas { display:block; }
+    .pill {
+      padding: 6px 10px;
+      border-radius: 999px;
+      border: 1px solid rgba(255,255,255,0.12);
+      background: rgba(255,255,255,0.06);
+      font-size: 12px;
+    }
+    .warn { border-color: rgba(255,170,100,0.35); background: rgba(255,170,100,0.08); }
   </style>
 </head>
 <body>
   <canvas id="c"></canvas>
 
   <div id="ui">
-    <div class="panel" style="min-width:320px;">
-      <h3>Lobby (serverless P2P)</h3>
+    <div class="panel" style="min-width:340px;">
+      <h3>Auto Lobby (serverless P2P)</h3>
       <small>
-        Room is deterministic → lobby “auto appears”. Uses Trystero torrent backend (public trackers). No server you host. :contentReference[oaicite:1]{index=1}
+        This uses Trystero to discover peers without you running a server. If torrent trackers are blocked, it auto-falls back to Nostr relays.
       </small>
+
       <div class="row">
         <input id="name" maxlength="18" placeholder="nickname" />
         <button id="apply">Apply</button>
       </div>
+
       <div class="row">
         <label class="tag">Room:</label>
         <input id="room" placeholder="p2p-agar" />
         <button id="rejoin">Rejoin</button>
       </div>
+
+      <div class="row">
+        <span id="strategyBadge" class="pill">Strategy: …</span>
+        <span id="relayBadge" class="pill">Relays: …</span>
+      </div>
+
       <small id="status" style="margin-top:8px;">Connecting…</small>
+      <small style="margin-top:6px;">
+        If you see “WebSocket connection failed” in console, your network may block WebTorrent trackers.
+        The fallback helps, but some networks block all P2P bootstraps without TURN.
+      </small>
     </div>
 
     <div class="panel" style="min-width:260px;">
       <h3>Players online</h3>
       <ul id="peers"></ul>
       <small>
-        Tip: open this page in another tab/device. If a strict network blocks P2P, some peers may not connect without TURN (not free). 
+        Tip: open this page in another tab/device. Press <b>R</b> to respawn.
       </small>
     </div>
   </div>
@@ -88,23 +113,22 @@
   <div id="toast"></div>
 
   <script type="module">
-    // Trystero deep import for torrent strategy is documented/used in the ecosystem. :contentReference[oaicite:2]{index=2}
-    // Using a CDN URL is allowed for ESM modules in browsers (subject to CORS). :contentReference[oaicite:3]{index=3}
-    import { joinRoom } from "https://cdn.skypack.dev/trystero/torrent";
+    // Use esm.run as recommended in Trystero README for CDN module import. :contentReference[oaicite:4]{index=4}
+    import { joinRoom as joinRoomTorrent } from "https://esm.run/trystero/torrent";
+    import { joinRoom as joinRoomNostr } from "https://esm.run/trystero/nostr";
 
     /********************************************************************
-     * 0) Small utilities
+     * 0) Utilities
      ********************************************************************/
     const $ = (id) => document.getElementById(id);
     const toastEl = $("toast");
-    function toast(msg, ms = 1600) {
+    function toast(msg, ms = 1800) {
       toastEl.textContent = msg;
       toastEl.style.display = "block";
       clearTimeout(toastEl._t);
       toastEl._t = setTimeout(() => toastEl.style.display = "none", ms);
     }
 
-    // Fast stable hash for room -> seed
     function hashStringToU32(str) {
       let h = 2166136261 >>> 0;
       for (let i = 0; i < str.length; i++) {
@@ -114,7 +138,6 @@
       return h >>> 0;
     }
 
-    // Deterministic PRNG (Mulberry32)
     function mulberry32(seed) {
       return function() {
         let t = (seed += 0x6D2B79F5) >>> 0;
@@ -126,8 +149,19 @@
 
     function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
 
+    function randomColor() {
+      const hue = Math.floor(Math.random() * 360);
+      return `hsl(${hue} 85% 55%)`;
+    }
+
+    function escapeHtml(s) {
+      return String(s).replace(/[&<>"']/g, (c) => ({
+        "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"
+      }[c]));
+    }
+
     /********************************************************************
-     * 1) Game constants + world
+     * 1) Canvas + world
      ********************************************************************/
     const canvas = $("c");
     const ctx = canvas.getContext("2d");
@@ -142,13 +176,8 @@
     window.addEventListener("resize", resize);
     resize();
 
-    // World coordinates
-    const WORLD = {
-      w: 4500,
-      h: 4500,
-    };
+    const WORLD = { w: 4500, h: 4500 };
 
-    // Local player (authoritative over self)
     const my = {
       id: crypto.randomUUID(),
       name: "anon",
@@ -163,13 +192,10 @@
       lastSentAt: 0,
     };
 
-    // Remote players map: peerId -> state
-    const remotes = new Map(); // key: peerId, value: {profile+state}
-
-    // Shared pellets via deterministic generation + distributed removal events
+    const remotes = new Map(); // peerId -> {state}
     const PELLET_COUNT = 800;
-    let pellets = [];          // [{id, x, y, r}]
-    let removedPellets = new Set(); // ids removed by events
+    let pellets = [];
+    let removedPellets = new Set();
 
     function rebuildPellets(roomId) {
       const seed = hashStringToU32("pellets:" + roomId);
@@ -184,26 +210,9 @@
       }
     }
 
-    function randomColor() {
-      const hue = Math.floor(Math.random() * 360);
-      return `hsl(${hue} 85% 55%)`;
-    }
-
     /********************************************************************
-     * 2) Trystero: lobby + game in one deterministic room
-     *
-     * joinRoom({appId}, roomId) + onPeerJoin/Leave + makeAction are core API. :contentReference[oaicite:4]{index=4}
+     * 2) UI
      ********************************************************************/
-    let room = null;
-    let stopNetLoop = null;
-
-    // Actions
-    let sendHello, onHello;
-    let sendPing, onPing;
-    let sendState, onState;
-    let sendPelletEaten, onPelletEaten;
-    let sendPlayerEaten, onPlayerEaten;
-
     const UI = {
       status: $("status"),
       name: $("name"),
@@ -211,9 +220,10 @@
       room: $("room"),
       rejoin: $("rejoin"),
       peers: $("peers"),
+      strategyBadge: $("strategyBadge"),
+      relayBadge: $("relayBadge"),
     };
 
-    // Default room name; also allow URL hash: #room=xyz
     const urlRoom = new URL(location.href).hash.match(/room=([^&]+)/)?.[1];
     UI.room.value = decodeURIComponent(urlRoom || "p2p-agar");
     UI.name.value = localStorage.getItem("p2pAgarName") || "anon";
@@ -234,58 +244,158 @@
 
     function setStatus(msg) { UI.status.textContent = msg; }
 
+    function setStrategyBadge(name, warn=false) {
+      UI.strategyBadge.textContent = `Strategy: ${name}`;
+      UI.strategyBadge.classList.toggle("warn", !!warn);
+    }
+
+    function setRelayBadge(text, warn=false) {
+      UI.relayBadge.textContent = text;
+      UI.relayBadge.classList.toggle("warn", !!warn);
+    }
+
     function renderPeersList() {
       const items = [];
+      items.push({ label: `${my.name} (you)`, detail: `r=${my.r.toFixed(0)}` });
 
-      // "Me"
-      items.push({
-        label: `${my.name} (you)`,
-        detail: `r=${my.r.toFixed(0)}`,
-      });
-
-      // Remotes
       for (const [peerId, p] of remotes.entries()) {
         const name = p.name || peerId.slice(0, 6);
         const alive = p.alive !== false;
-        items.push({
-          label: `${name}${alive ? "" : " (dead)"}`,
-          detail: `r=${(p.r || 0).toFixed(0)}`,
-        });
+        items.push({ label: `${name}${alive ? "" : " (dead)"}`, detail: `r=${(p.r || 0).toFixed(0)}` });
       }
 
       UI.peers.innerHTML = items
-        .sort((a,b) => (b.detail.localeCompare(a.detail)))
+        .sort((a,b) => b.detail.localeCompare(a.detail))
         .map(x => `<li><span>${escapeHtml(x.label)}</span><span class="tag">${escapeHtml(x.detail)}</span></li>`)
         .join("");
     }
 
-    function escapeHtml(s) {
-      return String(s).replace(/[&<>"']/g, (c) => ({
-        "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"
-      }[c]));
-    }
+    /********************************************************************
+     * 3) Trystero networking (torrent -> nostr fallback)
+     ********************************************************************/
+    let room = null;
+    let stopNetLoop = null;
 
-    async function join(roomId) {
-      // teardown previous
+    let sendHello, onHello;
+    let sendPing, onPing;
+    let sendState, onState;
+    let sendPelletEaten, onPelletEaten;
+    let sendPlayerEaten, onPlayerEaten;
+
+    function teardownRoom() {
       if (stopNetLoop) stopNetLoop();
+      stopNetLoop = null;
+
       if (room) {
         try { room.leave?.(); } catch {}
       }
+      room = null;
 
+      sendHello = onHello = null;
+      sendPing = onPing = null;
+      sendState = onState = null;
+      sendPelletEaten = onPelletEaten = null;
+      sendPlayerEaten = onPlayerEaten = null;
+    }
+
+    // IMPORTANT: Trystero supports relayUrls / relayRedundancy / turnConfig etc. :contentReference[oaicite:5]{index=5}
+    // We'll keep this "zero-cost" and avoid TURN.
+
+    const TORRENT_RELAYS = [
+      // These are the common WebTorrent WebSocket trackers.
+      // If your network blocks them, torrent strategy will fail and we'll fall back.
+      "wss://tracker.openwebtorrent.com",
+      "wss://tracker.btorrent.xyz",
+      // A third public tracker exists and often works, but some clients report differing behavior:
+      // "wss://tracker.webtorrent.dev"
+    ];
+
+    // For Nostr we rely on Trystero’s defaults (keeps the file shorter).
+    // You can optionally pass relayUrls for Nostr too via config.relayUrls. :contentReference[oaicite:6]{index=6}
+
+    async function join(roomId) {
+      teardownRoom();
       remotes.clear();
       renderPeersList();
-
       rebuildPellets(roomId);
 
-      const config = { appId: "p2p-agar-demo-v1" };
-      setStatus("Connecting to lobby…");
+      my.name = (UI.name.value || "anon").trim().slice(0, 18);
 
-      // joinRoom(config, roomId) is the core entry point. :contentReference[oaicite:5]{index=5}
-      room = joinRoom(config, roomId);
+      setStatus("Connecting (torrent)…");
+      setStrategyBadge("torrent", false);
+      setRelayBadge("Relays: connecting…", false);
 
-      // peer lifecycle (join/leave). :contentReference[oaicite:6]{index=6}
+      // Try torrent first
+      const ok = await tryJoinTorrent(roomId);
+
+      if (!ok) {
+        // Fallback
+        toast("Torrent trackers blocked/unreachable → switching to Nostr fallback");
+        setStatus("Connecting (nostr fallback)…");
+        setStrategyBadge("nostr (fallback)", true);
+        setRelayBadge("Relays: using public Nostr relays", true);
+
+        teardownRoom();
+        await tryJoinNostr(roomId);
+      }
+    }
+
+    async function tryJoinTorrent(roomId) {
+      let joinError = null;
+
+      const config = {
+        appId: "p2p-agar-demo-v2",
+        relayUrls: TORRENT_RELAYS,
+        // relayRedundancy is ignored if relayUrls is provided. :contentReference[oaicite:7]{index=7}
+        // relayRedundancy: 3,
+      };
+
+      // joinRoom signature supports onJoinError callback. :contentReference[oaicite:8]{index=8}
+      room = joinRoomTorrent(config, roomId, (err) => {
+        joinError = err || new Error("Unknown join error");
+      });
+
+      wireRoomCommon(roomId);
+
+      // Wait briefly to see if at least 1 relay connection succeeds.
+      // If WebSockets are blocked, you'll see the exact error you pasted.
+      const deadline = performance.now() + 4500;
+      while (performance.now() < deadline) {
+        if (joinError) break;
+
+        // If at least one peer connects, we're good.
+        // (In an empty room, you might still have zero peers, so we also accept “no joinError by deadline”.)
+        await sleep(150);
+      }
+
+      if (joinError) {
+        setRelayBadge("Relays: failed (torrent)", true);
+        return false;
+      }
+
+      // We can’t perfectly detect relay success without internal hooks,
+      // but if we got no error, proceed.
+      setRelayBadge(`Relays: ${TORRENT_RELAYS.length} configured`, false);
+      setStatus(`In lobby: ${roomId} (torrent) — move mouse to steer; eat pellets/players`);
+      broadcastHello();
+      toast("Connected (torrent)");
+      return true;
+    }
+
+    async function tryJoinNostr(roomId) {
+      const config = { appId: "p2p-agar-demo-v2" };
+      room = joinRoomNostr(config, roomId);
+
+      wireRoomCommon(roomId);
+
+      setStatus(`In lobby: ${roomId} (nostr fallback) — move mouse to steer; eat pellets/players`);
+      broadcastHello();
+      toast("Connected (nostr fallback)");
+    }
+
+    function wireRoomCommon(roomId) {
+      // Peer join/leave
       room.onPeerJoin((peerId) => {
-        // placeholder; will be filled by hello/state
         remotes.set(peerId, remotes.get(peerId) || {
           peerId,
           name: peerId.slice(0, 6),
@@ -297,7 +407,7 @@
           lastHeardAt: performance.now(),
           lastSeq: -1,
         });
-        broadcastHello(); // tell new peer who we are
+        broadcastHello();
         renderPeersList();
         toast(`Peer joined: ${peerId.slice(0,6)}`);
       });
@@ -308,7 +418,7 @@
         toast(`Peer left: ${peerId.slice(0,6)}`);
       });
 
-      // Define message actions. makeAction is core Trystero API. :contentReference[oaicite:7]{index=7}
+      // Actions
       [sendHello, onHello] = room.makeAction("hello");
       [sendPing, onPing] = room.makeAction("ping");
       [sendState, onState] = room.makeAction("state");
@@ -319,6 +429,7 @@
         const now = performance.now();
         const p = remotes.get(peerId) || { peerId, lastSeq: -1 };
         p.lastHeardAt = now;
+        if (payload?.myId) p.myId = payload.myId;
         if (payload?.name) p.name = String(payload.name).slice(0, 18);
         if (payload?.color) p.color = payload.color;
         if (payload?.alive !== undefined) p.alive = !!payload.alive;
@@ -326,7 +437,7 @@
         renderPeersList();
       });
 
-      onPing((payload, peerId) => {
+      onPing((_payload, peerId) => {
         const p = remotes.get(peerId);
         if (!p) return;
         p.lastHeardAt = performance.now();
@@ -336,12 +447,12 @@
         const p = remotes.get(peerId);
         if (!p || !payload) return;
 
-        // basic out-of-order protection
         const seq = payload.seq ?? 0;
         if (seq <= (p.lastSeq ?? -1)) return;
         p.lastSeq = seq;
 
         p.lastHeardAt = performance.now();
+        p.myId = payload.myId || p.myId;
         p.x = payload.x;
         p.y = payload.y;
         p.vx = payload.vx || 0;
@@ -352,27 +463,19 @@
         p.color = payload.color || p.color;
       });
 
-      onPelletEaten((payload, peerId) => {
+      onPelletEaten((payload) => {
         if (!payload) return;
         const id = payload.id;
         if (typeof id !== "number") return;
         if (removedPellets.has(id)) return;
-
         removedPellets.add(id);
-        // If the eater is the sender, trust their growth
-        // Otherwise we still remove the pellet locally.
       });
 
-      onPlayerEaten((payload, peerId) => {
-        // payload: { loserPeerId?, loserMyId?, winnerPeerId?, t }
+      onPlayerEaten((payload) => {
         if (!payload) return;
-
-        // If we are the loser, respawn.
-        // Since Trystero peerId differs per connection, we use "my.id" to identify self globally.
         if (payload.loserMyId === my.id) {
           respawn("You were eaten!");
         }
-        // If remote is loser, mark them dead until they start sending alive states again.
         if (payload.loserPeerId && remotes.has(payload.loserPeerId)) {
           const p = remotes.get(payload.loserPeerId);
           p.alive = false;
@@ -380,35 +483,21 @@
         renderPeersList();
       });
 
-      // Start network housekeeping
-      stopNetLoop = startNetworkLoops(roomId);
-
-      my.name = (UI.name.value || "anon").trim().slice(0, 18);
-      broadcastHello();
-      setStatus(`In lobby: ${roomId} (move mouse to steer; eat pellets/players)`);
-      toast("Connected");
+      stopNetLoop = startNetworkLoops();
     }
 
     function broadcastHello() {
       if (!sendHello) return;
-      sendHello({
-        myId: my.id,
-        name: my.name,
-        color: my.color,
-        alive: my.alive,
-        v: 1
-      });
+      sendHello({ myId: my.id, name: my.name, color: my.color, alive: my.alive, v: 2 });
     }
 
-    function startNetworkLoops(roomId) {
+    function startNetworkLoops() {
       let stopped = false;
 
-      // Heartbeat + stale cleanup
       const heartbeat = setInterval(() => {
         if (stopped) return;
         sendPing?.({ t: Date.now() });
 
-        // stale peer cleanup (self-healing)
         const now = performance.now();
         for (const [peerId, p] of remotes.entries()) {
           if (now - (p.lastHeardAt || 0) > 16000) {
@@ -424,8 +513,10 @@
       };
     }
 
+    function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
     /********************************************************************
-     * 3) Input + movement + simple Agar mechanics
+     * 4) Game mechanics (Agar-like)
      ********************************************************************/
     let mouse = { x: window.innerWidth/2, y: window.innerHeight/2 };
     window.addEventListener("mousemove", (e) => { mouse.x = e.clientX; mouse.y = e.clientY; });
@@ -440,7 +531,6 @@
       toast(msg || "Respawned");
     }
 
-    // Eat pellet locally if close; broadcast removal
     function tryEatPellets() {
       if (!my.alive) return;
 
@@ -457,24 +547,21 @@
       }
     }
 
-    // Eat other players (simple rule: if I'm larger by factor and close enough)
     function tryEatPlayers() {
       if (!my.alive) return;
       for (const [peerId, p] of remotes.entries()) {
         if (!p.alive) continue;
         const theirR = p.r || 0;
-        if (my.r < theirR * 1.15) continue; // must be meaningfully bigger
+        if (my.r < theirR * 1.15) continue;
         const dx = p.x - my.x, dy = p.y - my.y;
         const d = Math.hypot(dx, dy);
         if (d < my.r * 0.85) {
-          // "eat" them
           my.r += theirR * 0.35;
           p.alive = false;
           sendPlayerEaten?.({
             loserPeerId: peerId,
-            loserMyId: p.myId,   // might be unknown; okay
+            loserMyId: p.myId,
             winnerMyId: my.id,
-            winnerPeerId: null,
             t: Date.now()
           });
           toast(`You ate ${p.name || peerId.slice(0,6)}!`);
@@ -483,7 +570,6 @@
       }
     }
 
-    // Smooth remote movement: basic interpolation using last known velocity
     function updateRemotes(dt) {
       for (const p of remotes.values()) {
         if (!p.alive) continue;
@@ -495,36 +581,27 @@
     }
 
     /********************************************************************
-     * 4) Render: camera follows player; draw pellets + players + minimap
+     * 5) Render
      ********************************************************************/
     function draw() {
-      // camera centered on me
       const w = window.innerWidth, h = window.innerHeight;
       const camX = my.x - w/2;
       const camY = my.y - h/2;
 
-      // background
       ctx.clearRect(0, 0, w, h);
       ctx.fillStyle = "#0b0f14";
       ctx.fillRect(0, 0, w, h);
 
-      // world border
       ctx.save();
       ctx.translate(-camX, -camY);
 
-      // subtle grid
       ctx.globalAlpha = 0.12;
       ctx.strokeStyle = "#7aa0d0";
       ctx.lineWidth = 1;
-      for (let x = 0; x <= WORLD.w; x += 150) {
-        ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, WORLD.h); ctx.stroke();
-      }
-      for (let y = 0; y <= WORLD.h; y += 150) {
-        ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(WORLD.w, y); ctx.stroke();
-      }
+      for (let x = 0; x <= WORLD.w; x += 150) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, WORLD.h); ctx.stroke(); }
+      for (let y = 0; y <= WORLD.h; y += 150) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(WORLD.w, y); ctx.stroke(); }
       ctx.globalAlpha = 1;
 
-      // pellets
       for (const pel of pellets) {
         if (removedPellets.has(pel.id)) continue;
         ctx.beginPath();
@@ -533,21 +610,17 @@
         ctx.fill();
       }
 
-      // players
       for (const [peerId, p] of remotes.entries()) {
         if (!p.alive) continue;
         drawPlayer(p.x, p.y, p.r, p.color, p.name || peerId.slice(0,6), false);
       }
       if (my.alive) drawPlayer(my.x, my.y, my.r, my.color, my.name, true);
 
-      // border
       ctx.strokeStyle = "rgba(255,255,255,0.18)";
       ctx.lineWidth = 4;
       ctx.strokeRect(0, 0, WORLD.w, WORLD.h);
 
       ctx.restore();
-
-      // minimap
       drawMinimap();
     }
 
@@ -561,7 +634,6 @@
       ctx.strokeStyle = isMe ? "rgba(255,255,255,0.55)" : "rgba(0,0,0,0.35)";
       ctx.stroke();
 
-      // name
       ctx.font = `${Math.max(12, Math.min(18, r*0.55))}px system-ui`;
       ctx.fillStyle = "rgba(255,255,255,0.92)";
       ctx.textAlign = "center";
@@ -584,17 +656,14 @@
       ctx.fill();
       ctx.stroke();
 
-      // points
       const sx = mw / WORLD.w;
       const sy = mh / WORLD.h;
 
-      // my dot
       ctx.fillStyle = my.color;
       ctx.beginPath();
       ctx.arc(x0 + my.x*sx, y0 + my.y*sy, 3.2, 0, Math.PI*2);
       ctx.fill();
 
-      // remote dots
       for (const p of remotes.values()) {
         if (!p.alive) continue;
         ctx.fillStyle = p.color || "#8ad";
@@ -618,7 +687,7 @@
     }
 
     /********************************************************************
-     * 5) Main loop + networking tick
+     * 6) Main loop
      ********************************************************************/
     let last = performance.now();
 
@@ -626,7 +695,6 @@
       const dt = Math.min(0.05, (now - last) / 1000);
       last = now;
 
-      // movement: steer toward mouse (screen-space -> world-space via camera)
       if (my.alive) {
         const w = window.innerWidth, h = window.innerHeight;
         const targetX = my.x + (mouse.x - w/2);
@@ -635,12 +703,10 @@
         const dy = targetY - my.y;
         const d = Math.hypot(dx, dy) || 1;
 
-        // Agar-like: bigger means slower
         const maxSpeed = 320 / Math.sqrt(my.r);
         const ax = (dx / d) * maxSpeed;
         const ay = (dy / d) * maxSpeed;
 
-        // smoothing
         my.vx = my.vx * 0.82 + ax * 0.18;
         my.vy = my.vy * 0.82 + ay * 0.18;
 
@@ -648,12 +714,10 @@
         my.y = clamp(my.y + my.vy * dt, 0, WORLD.h);
       }
 
-      // mechanics
       tryEatPellets();
       tryEatPlayers();
       updateRemotes(dt);
 
-      // send my state at ~15 Hz
       if (room && sendState) {
         const nowMs = performance.now();
         if (nowMs - my.lastSentAt > 66) {
@@ -680,15 +744,17 @@
     }
 
     /********************************************************************
-     * 6) Boot
+     * 7) Boot
      ********************************************************************/
     (function boot() {
       my.name = (UI.name.value || "anon").trim().slice(0, 18);
-
       const roomId = (UI.room.value || "p2p-agar").trim();
+
+      setRelayBadge("Relays: …", false);
+      setStrategyBadge("…", false);
+
       join(roomId);
 
-      // safety: respawn on keypress R
       window.addEventListener("keydown", (e) => {
         if (e.key.toLowerCase() === "r") respawn("Respawned");
       });
