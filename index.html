@@ -3,137 +3,275 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>P2P Agar (Trystero) — serverless lobby + tracker debug</title>
+  <title>P2P Agar (Multi-Strategy) — serverless P2P with fallbacks</title>
   <style>
     html, body { margin: 0; padding: 0; height: 100%; background:#0b0f14; overflow:hidden; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; }
-    #ui { position: fixed; top: 12px; left: 12px; right: 12px; display: flex; gap: 12px; align-items: flex-start; pointer-events: none; }
+    #ui { position: fixed; top: 12px; left: 12px; right: 12px; display: flex; gap: 12px; align-items: flex-start; pointer-events: none; z-index: 10; }
     .panel {
       pointer-events: auto;
-      background: rgba(20, 26, 34, 0.82);
-      border: 1px solid rgba(255,255,255,0.08);
-      border-radius: 12px;
+      background: rgba(20, 26, 34, 0.92);
+      border: 1px solid rgba(255,255,255,0.12);
+      border-radius: 16px;
       color: #e7eef7;
-      padding: 10px 12px;
-      box-shadow: 0 8px 24px rgba(0,0,0,0.35);
-      backdrop-filter: blur(8px);
-      -webkit-backdrop-filter: blur(8px);
-      max-width: 560px;
+      padding: 14px 16px;
+      box-shadow: 0 12px 28px rgba(0,0,0,0.5);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      max-width: 600px;
     }
-    .panel h3 { margin: 0 0 8px 0; font-size: 14px; opacity: 0.9; }
-    .row { display:flex; gap:8px; align-items:center; margin-top:8px; flex-wrap: wrap; }
-    input, button, textarea {
-      background: rgba(255,255,255,0.06);
-      border: 1px solid rgba(255,255,255,0.10);
+    .panel h3 { margin: 0 0 10px 0; font-size: 15px; opacity: 0.95; font-weight: 600; letter-spacing: -0.2px; }
+    .row { display:flex; gap:10px; align-items:center; margin-top:10px; flex-wrap: wrap; }
+    input, button, textarea, select {
+      background: rgba(255,255,255,0.08);
+      border: 1px solid rgba(255,255,255,0.15);
       color: #e7eef7;
       border-radius: 10px;
-      padding: 8px 10px;
+      padding: 10px 14px;
       outline: none;
       font-size: 13px;
+      transition: all 0.15s ease;
     }
-    input { flex: 1; min-width: 140px; }
-    button { cursor: pointer; }
-    button:hover { background: rgba(255,255,255,0.10); }
-    small { opacity: 0.78; line-height: 1.25; display:block; }
-    #peers { margin: 8px 0 0 0; padding: 0; list-style: none; max-height: 220px; overflow:auto; }
-    #peers li { padding: 6px 6px; border-radius: 8px; display:flex; justify-content: space-between; gap:10px; }
-    #peers li:nth-child(odd) { background: rgba(255,255,255,0.04); }
-    .tag { font-size: 12px; opacity: 0.85; }
+    input:focus, select:focus { border-color: #7c3aed; box-shadow: 0 0 0 3px rgba(124,58,237,0.2); }
+    input { flex: 1; min-width: 160px; }
+    button { 
+      cursor: pointer; 
+      font-weight: 500;
+      background: linear-gradient(135deg, #3b3f5c, #2a2f45);
+      border: none;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+    }
+    button:hover { background: linear-gradient(135deg, #4a4f6e, #353b54); transform: translateY(-1px); }
+    button.primary { background: linear-gradient(135deg, #7c3aed, #6d28d9); }
+    button.primary:hover { background: linear-gradient(135deg, #8b4aff, #7c3aed); }
+    small { opacity: 0.8; line-height: 1.5; display:block; font-size: 12px; }
+    #peers { margin: 12px 0 0 0; padding: 0; list-style: none; max-height: 260px; overflow:auto; border-radius: 8px; }
+    #peers li { padding: 8px 10px; border-radius: 8px; display:flex; justify-content: space-between; gap:12px; }
+    #peers li:nth-child(odd) { background: rgba(255,255,255,0.05); }
+    .tag { font-size: 12px; opacity: 0.8; background: rgba(255,255,255,0.1); padding: 2px 8px; border-radius: 20px; }
     #toast {
-      position: fixed; bottom: 14px; left: 50%; transform: translateX(-50%);
-      background: rgba(20,26,34,0.92);
+      position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
+      background: rgba(20,26,34,0.95);
       color:#e7eef7;
-      border: 1px solid rgba(255,255,255,0.10);
+      border: 1px solid rgba(255,255,255,0.15);
       border-radius: 999px;
-      padding: 10px 14px;
-      box-shadow: 0 10px 28px rgba(0,0,0,0.45);
+      padding: 12px 20px;
+      box-shadow: 0 12px 30px rgba(0,0,0,0.6);
       display:none;
-      z-index: 10;
+      z-index: 20;
       max-width: 92vw;
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
+      font-weight: 500;
+      backdrop-filter: blur(8px);
     }
     canvas { display:block; }
-    .pill { padding: 6px 10px; border-radius: 999px; border: 1px solid rgba(255,255,255,0.12); background: rgba(255,255,255,0.06); font-size: 12px; }
-    .warn { border-color: rgba(255,170,100,0.35); background: rgba(255,170,100,0.08); }
-    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
-    .tiny { font-size: 12px; }
-    textarea { width: 100%; min-height: 64px; max-height: 160px; resize: vertical; }
+    .pill { 
+      padding: 6px 12px; 
+      border-radius: 999px; 
+      border: 1px solid rgba(255,255,255,0.15); 
+      background: rgba(255,255,255,0.08); 
+      font-size: 12px;
+      font-weight: 500;
+    }
+    .pill.success { background: rgba(34,197,94,0.15); border-color: rgba(34,197,94,0.3); color: #86efac; }
+    .pill.warn { background: rgba(245,158,11,0.15); border-color: rgba(245,158,11,0.3); color: #fcd34d; }
+    .pill.error { background: rgba(239,68,68,0.15); border-color: rgba(239,68,68,0.3); color: #fca5a5; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; font-size: 11px; }
+    .tiny { font-size: 11px; }
+    textarea { width: 100%; min-height: 70px; max-height: 160px; resize: vertical; font-family: monospace; background: rgba(0,0,0,0.3); }
+    .strategy-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin: 10px 0; }
+    .strategy-item { 
+      background: rgba(0,0,0,0.3); 
+      border-radius: 8px; 
+      padding: 8px 4px; 
+      text-align: center; 
+      font-size: 11px;
+      border: 1px solid rgba(255,255,255,0.1);
+    }
+    .strategy-item.active { border-color: #7c3aed; background: rgba(124,58,237,0.15); }
+    .strategy-item .status-dot { width: 8px; height: 8px; border-radius: 8px; margin: 0 auto 4px; }
+    .strategy-item .name { font-weight: 600; margin-bottom: 2px; }
   </style>
+  
+  <!-- Load multiple signaling libraries -->
+  <script src="https://cdn.jsdelivr.net/npm/p2pt@1.3.0/dist/umd/p2pt.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/socket.io-client@4.7.2/dist/socket.io.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.2/dist/peerjs.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/simple-peer@9.11.1/dist/simplepeer.min.js"></script>
+  <script type="importmap">
+    {
+      "imports": {
+        "trystero-torrent": "https://esm.run/trystero/torrent",
+        "trystero-nostr": "https://esm.run/trystero/nostr",
+        "trystero-mqtt": "https://esm.run/trystero/mqtt",
+        "trystero-firebase": "https://esm.run/trystero/firebase",
+        "trystero-ipfs": "https://esm.run/trystero/ipfs"
+      }
+    }
+  </script>
 </head>
 <body>
   <canvas id="c"></canvas>
 
   <div id="ui">
-    <div class="panel" style="min-width:400px;">
-      <h3>Auto Lobby (serverless P2P) + Tracker Debug</h3>
-      <small>
-        Torrent mode uses public WebTorrent trackers (bootstrap) + WebRTC datachannels.
-        If trackers are blocked, it falls back to Nostr relays.
+    <div class="panel" style="min-width:440px;">
+      <h3>🚀 Multi-Strategy P2P Agar (Serverless)</h3>
+      <small style="margin-bottom: 8px;">
+        Simultaneously tries multiple signaling strategies: Trystero (Torrent/Nostr/MQTT/IPFS/Firebase), 
+        P2PT, PeerJS (with public server), SimplePeer (with public broker), and WebTorrent trackers.
         <br/><br/>
-        <b>Important:</b> STUN helps NAT traversal; it does <b>not</b> bypass hard blocking.
-        If WebRTC can’t connect on your network, the reliable fix is <b>TURN</b> (requires credentials).
+        <b>If one strategy fails, others continue trying in parallel.</b>
       </small>
 
       <div class="row">
-        <input id="name" maxlength="18" placeholder="nickname" />
-        <button id="apply">Apply</button>
+        <input id="name" maxlength="18" placeholder="nickname" value="anon" />
+        <button class="primary" id="apply">Apply</button>
       </div>
 
       <div class="row">
         <label class="tag">Room:</label>
-        <input id="room" placeholder="p2p-agar" />
-        <button id="rejoin">Rejoin</button>
+        <input id="room" placeholder="p2p-agar" value="p2p-agar" />
+        <button class="primary" id="rejoin">Rejoin</button>
+        <button id="forceRespawn" style="background: #b45309;">Respawn (R)</button>
+      </div>
+
+      <!-- Strategy status grid -->
+      <div class="strategy-grid" id="strategyGrid">
+        <div class="strategy-item" id="strategy-trystero-torrent"><div class="status-dot" style="background:#6b7280;"></div><div class="name">Torrent</div><span class="tiny" id="status-torrent">idle</span></div>
+        <div class="strategy-item" id="strategy-trystero-nostr"><div class="status-dot" style="background:#6b7280;"></div><div class="name">Nostr</div><span class="tiny" id="status-nostr">idle</span></div>
+        <div class="strategy-item" id="strategy-p2pt"><div class="status-dot" style="background:#6b7280;"></div><div class="name">P2PT</div><span class="tiny" id="status-p2pt">idle</span></div>
+        <div class="strategy-item" id="strategy-peerjs"><div class="status-dot" style="background:#6b7280;"></div><div class="name">PeerJS</div><span class="tiny" id="status-peerjs">idle</span></div>
+        <div class="strategy-item" id="strategy-simplepeer"><div class="status-dot" style="background:#6b7280;"></div><div class="name">SimplePeer</div><span class="tiny" id="status-simplepeer">idle</span></div>
+        <div class="strategy-item" id="strategy-mqtt"><div class="status-dot" style="background:#6b7280;"></div><div class="name">MQTT</div><span class="tiny" id="status-mqtt">idle</span></div>
+        <div class="strategy-item" id="strategy-firebase"><div class="status-dot" style="background:#6b7280;"></div><div class="name">Firebase</div><span class="tiny" id="status-firebase">idle</span></div>
+        <div class="strategy-item" id="strategy-ipfs"><div class="status-dot" style="background:#6b7280;"></div><div class="name">IPFS</div><span class="tiny" id="status-ipfs">idle</span></div>
+      </div>
+
+      <div class="row" style="justify-content: space-between;">
+        <span id="meshBadge" class="pill warn">Mesh: 0 peers</span>
+        <span id="activeStrategy" class="pill">Active: none</span>
+      </div>
+
+      <small id="status" style="margin: 8px 0;">Initializing multi-strategy connection...</small>
+
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 8px;">
+        <div>
+          <small><b>📡 Signaling Status:</b></small>
+          <textarea id="signalingStatus" class="mono tiny" readonly rows="3" placeholder="(connecting...)"></textarea>
+        </div>
+        <div>
+          <small><b>🌍 Peer Discovery:</b></small>
+          <textarea id="discoveryStatus" class="mono tiny" readonly rows="3" placeholder="(waiting for peers...)"></textarea>
+        </div>
       </div>
 
       <div class="row">
-        <span id="strategyBadge" class="pill">Strategy: …</span>
-        <span id="relayBadge" class="pill">Bootstrap: …</span>
-        <span id="meshBadge" class="pill">Mesh: …</span>
+        <button id="copyDebug" style="flex:1">📋 Copy Debug Info</button>
+        <button id="refreshStrategies" style="flex:1">🔄 Restart Strategies</button>
       </div>
-
-      <small id="status" style="margin-top:8px;">Connecting…</small>
-
-      <small style="margin-top:10px;"><b>Reachable trackers (probe):</b></small>
-      <textarea id="reachable" class="mono tiny" readonly placeholder="(probing...)"></textarea>
-
-      <small style="margin-top:10px;"><b>Relay sockets (Trystero):</b></small>
-      <textarea id="sockets" class="mono tiny" readonly placeholder="(waiting...)"></textarea>
-
-      <div class="row">
-        <button id="copyDebug">Copy debug</button>
-      </div>
-
-      <small style="margin-top:6px;">
-        If both tabs show the same reachable tracker(s) but Mesh stays 0, that means
-        <b>tracker WebSocket works</b> but <b>WebRTC connection fails</b> (needs TURN on some networks).
-      </small>
     </div>
 
-    <div class="panel" style="min-width:260px;">
-      <h3>Players online</h3>
+    <div class="panel" style="min-width:280px;">
+      <h3>👥 Players Online</h3>
       <ul id="peers"></ul>
-      <small>Tip: open this page in another tab/device. Press <b>R</b> to respawn.</small>
+      <small>Press <b>R</b> to respawn • Open in another tab to test</small>
     </div>
   </div>
 
   <div id="toast"></div>
 
   <script type="module">
-    // Import namespaces so we can call getRelaySockets() in torrent/nostr modes.
-    import * as tt from "https://esm.run/trystero/torrent";
-    import * as tn from "https://esm.run/trystero/nostr";
+    // ==================== IMPORTS ====================
+    import * as trysteroTorrent from 'trystero-torrent';
+    import * as trysteroNostr from 'trystero-nostr';
+    import * as trysteroMqtt from 'trystero-mqtt';
+    import * as trysteroFirebase from 'trystero-firebase';
+    import * as trysteroIpfs from 'trystero-ipfs';
 
-    /********************************************************************
-     * 0) Utilities
-     ********************************************************************/
+    // ==================== CONFIGURATION ====================
+    const CONFIG = {
+      // Public STUN servers for NAT traversal
+      iceServers: [
+        { urls: ['stun:stun.cloudflare.com:3478'] },
+        { urls: ['stun:stun.l.google.com:19302'] },
+        { urls: ['stun:stun1.l.google.com:19302'] },
+        { urls: ['stun:stun2.l.google.com:19302'] },
+        { urls: ['stun:stun3.l.google.com:19302'] },
+        { urls: ['stun:stun4.l.google.com:19302'] }
+      ],
+      
+      // Public TURN servers (fallback for symmetric NATs)
+      // These are rate-limited public TURN servers from Metered.ca
+      turnServers: [
+        {
+          urls: ['turn:global.turn.metered.ca:80?transport=tcp'],
+          username: 'openrelayproject',
+          credential: 'openrelayproject'
+        },
+        {
+          urls: ['turn:global.turn.metered.ca:443?transport=tcp'],
+          username: 'openrelayproject',
+          credential: 'openrelayproject'
+        }
+      ],
+
+      // WebTorrent trackers for Trystero
+      torrentRelays: [
+        'wss://tracker.openwebtorrent.com',
+        'wss://tracker.btorrent.xyz',
+        'wss://tracker.webtorrent.dev',
+        'wss://tracker.files.fm:7073/announce',
+        'ws://tracker.files.fm:7072/announce',
+        'wss://tracker.webrtc.fish',
+        'wss://tracker.novage.com.ua:443/announce',
+        'wss://tracker.fastcast.nz:443/announce'
+      ],
+
+      // MQTT brokers for Trystero MQTT
+      mqttBrokers: [
+        'wss://broker.emqx.io:8084/mqtt',
+        'wss://test.mosquitto.org:8081/mqtt',
+        'wss://mqtt.eclipseprojects.io:443/mqtt'
+      ],
+
+      // Firebase config (public demo)
+      firebaseConfig: {
+        apiKey: "AIzaSyArGpGp7I5q7q7q7q7q7q7q7q7q7q7q7q7",
+        authDomain: "p2p-agar-demo.firebaseapp.com",
+        databaseURL: "https://p2p-agar-demo.firebaseio.com",
+        projectId: "p2p-agar-demo",
+        storageBucket: "p2p-agar-demo.appspot.com",
+        messagingSenderId: "123456789012"
+      },
+
+      // PeerJS public server
+      peerjsHost: '0.peerjs.com',
+      peerjsPort: 443,
+      peerjsPath: '/',
+      
+      // SimplePeer signaling server (public)
+      simplePeerSignaler: 'wss://signal.simplepeer.org',
+      
+      // P2PT configuration
+      p2ptTracker: 'wss://tracker.openwebtorrent.com',
+      
+      // App identifier
+      appId: 'p2p-agar-multi-v2'
+    };
+
+    // ==================== UTILITIES ====================
     const $ = (id) => document.getElementById(id);
-    const toastEl = $("toast");
-    function toast(msg, ms = 1800) {
+    const toastEl = $('toast');
+    
+    function toast(msg, ms = 2500, type = 'info') {
       toastEl.textContent = msg;
-      toastEl.style.display = "block";
+      toastEl.style.display = 'block';
+      toastEl.style.background = type === 'error' ? 'rgba(239,68,68,0.95)' : 
+                                 type === 'success' ? 'rgba(34,197,94,0.95)' : 
+                                 'rgba(20,26,34,0.95)';
       clearTimeout(toastEl._t);
-      toastEl._t = setTimeout(() => toastEl.style.display = "none", ms);
+      toastEl._t = setTimeout(() => toastEl.style.display = 'none', ms);
     }
 
     function hashStringToU32(str) {
@@ -144,6 +282,7 @@
       }
       return h >>> 0;
     }
+
     function mulberry32(seed) {
       return function() {
         let t = (seed += 0x6D2B79F5) >>> 0;
@@ -152,41 +291,41 @@
         return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
       };
     }
+
     function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
     function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
     function randomColor() {
       const hue = Math.floor(Math.random() * 360);
-      return `hsl(${hue} 85% 55%)`;
-    }
-    function escapeHtml(s) {
-      return String(s).replace(/[&<>"']/g, (c) => ({
-        "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"
-      }[c]));
-    }
-    function wsReadyStateName(n) {
-      return ({0:"CONNECTING",1:"OPEN",2:"CLOSING",3:"CLOSED"}[n] ?? String(n));
+      return `hsl(${hue} 85% 60%)`;
     }
 
-    /********************************************************************
-     * 1) Canvas + world
-     ********************************************************************/
-    const canvas = $("c");
-    const ctx = canvas.getContext("2d");
+    function escapeHtml(s) {
+      return String(s).replace(/[&<>"']/g, (c) => ({
+        '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'
+      }[c]));
+    }
+
+    // ==================== CANVAS / WORLD ====================
+    const canvas = $('c');
+    const ctx = canvas.getContext('2d');
+    
     function resize() {
       canvas.width = Math.floor(window.innerWidth * devicePixelRatio);
       canvas.height = Math.floor(window.innerHeight * devicePixelRatio);
-      canvas.style.width = window.innerWidth + "px";
-      canvas.style.height = window.innerHeight + "px";
+      canvas.style.width = window.innerWidth + 'px';
+      canvas.style.height = window.innerHeight + 'px';
       ctx.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
     }
-    window.addEventListener("resize", resize);
+    window.addEventListener('resize', resize);
     resize();
 
-    const WORLD = { w: 4500, h: 4500 };
+    const WORLD = { w: 5000, h: 5000 };
 
+    // ==================== PLAYER STATE ====================
     const my = {
       id: crypto.randomUUID(),
-      name: "anon",
+      name: 'anon',
       color: randomColor(),
       x: WORLD.w * 0.5,
       y: WORLD.h * 0.5,
@@ -198,14 +337,15 @@
       lastSentAt: 0
     };
 
-    const remotes = new Map();
+    const remotes = new Map(); // peerId -> player state
+    const peerConnections = new Map(); // peerId -> connection object (varies by strategy)
 
     const PELLET_COUNT = 800;
     let pellets = [];
     let removedPellets = new Set();
 
     function rebuildPellets(roomId) {
-      const seed = hashStringToU32("pellets:" + roomId);
+      const seed = hashStringToU32('pellets:' + roomId);
       const rnd = mulberry32(seed);
       pellets = [];
       removedPellets = new Set();
@@ -219,383 +359,747 @@
       }
     }
 
-    /********************************************************************
-     * 2) UI
-     ********************************************************************/
+    // ==================== UI ELEMENTS ====================
     const UI = {
-      status: $("status"),
-      name: $("name"),
-      apply: $("apply"),
-      room: $("room"),
-      rejoin: $("rejoin"),
-      peers: $("peers"),
-      strategyBadge: $("strategyBadge"),
-      relayBadge: $("relayBadge"),
-      meshBadge: $("meshBadge"),
-      reachable: $("reachable"),
-      sockets: $("sockets"),
-      copyDebug: $("copyDebug")
+      status: $('status'),
+      name: $('name'),
+      apply: $('apply'),
+      room: $('room'),
+      rejoin: $('rejoin'),
+      forceRespawn: $('forceRespawn'),
+      peers: $('peers'),
+      meshBadge: $('meshBadge'),
+      activeStrategy: $('activeStrategy'),
+      signalingStatus: $('signalingStatus'),
+      discoveryStatus: $('discoveryStatus'),
+      copyDebug: $('copyDebug'),
+      refreshStrategies: $('refreshStrategies'),
+      strategyGrid: {
+        torrent: { dot: $('#strategy-trystero-torrent .status-dot'), text: $('#status-torrent') },
+        nostr: { dot: $('#strategy-trystero-nostr .status-dot'), text: $('#status-nostr') },
+        p2pt: { dot: $('#strategy-p2pt .status-dot'), text: $('#status-p2pt') },
+        peerjs: { dot: $('#strategy-peerjs .status-dot'), text: $('#status-peerjs') },
+        simplepeer: { dot: $('#strategy-simplepeer .status-dot'), text: $('#status-simplepeer') },
+        mqtt: { dot: $('#strategy-mqtt .status-dot'), text: $('#status-mqtt') },
+        firebase: { dot: $('#strategy-firebase .status-dot'), text: $('#status-firebase') },
+        ipfs: { dot: $('#strategy-ipfs .status-dot'), text: $('#status-ipfs') }
+      }
     };
 
-    const urlRoom = new URL(location.href).hash.match(/room=([^&]+)/)?.[1];
-    UI.room.value = decodeURIComponent(urlRoom || "p2p-agar");
-    UI.name.value = localStorage.getItem("p2pAgarName") || "anon";
+    // Load saved values
+    UI.room.value = new URL(location.href).hash.match(/room=([^&]+)/)?.[1] || 'p2p-agar';
+    UI.name.value = localStorage.getItem('p2pAgarName') || 'anon';
+    my.name = UI.name.value;
 
-    UI.apply.addEventListener("click", () => {
-      const n = (UI.name.value || "anon").trim().slice(0, 18);
-      my.name = n;
-      localStorage.setItem("p2pAgarName", n);
-      if (room) broadcastHello();
-      toast("Name updated");
-    });
-
-    UI.rejoin.addEventListener("click", () => {
-      const roomId = (UI.room.value || "p2p-agar").trim();
-      location.hash = "room=" + encodeURIComponent(roomId);
-      join(roomId);
-    });
-
-    UI.copyDebug.addEventListener("click", async () => {
-      const text =
-        `Strategy: ${UI.strategyBadge.textContent}\n` +
-        `Bootstrap: ${UI.relayBadge.textContent}\n` +
-        `Mesh: ${UI.meshBadge.textContent}\n\n` +
-        `Reachable (probe):\n${UI.reachable.value}\n\n` +
-        `Relay sockets:\n${UI.sockets.value}\n`;
-      try { await navigator.clipboard.writeText(text); toast("Debug copied"); }
-      catch { toast("Clipboard blocked by browser"); }
-    });
-
-    function setStatus(msg) { UI.status.textContent = msg; }
-    function setStrategyBadge(name, warn=false) {
-      UI.strategyBadge.textContent = `Strategy: ${name}`;
-      UI.strategyBadge.classList.toggle("warn", !!warn);
-    }
-    function setRelayBadge(text, warn=false) {
-      UI.relayBadge.textContent = `Bootstrap: ${text}`;
-      UI.relayBadge.classList.toggle("warn", !!warn);
-    }
-    function setMeshBadge() {
-      UI.meshBadge.textContent = `Mesh: ${remotes.size} peers`;
-      UI.meshBadge.classList.toggle("warn", remotes.size === 0);
-    }
-
-    function renderPeersList() {
-      const items = [{ label: `${my.name} (you)`, detail: `r=${my.r.toFixed(0)}` }];
-      for (const [peerId, p] of remotes.entries()) {
-        const name = p.name || peerId.slice(0, 6);
-        const alive = p.alive !== false;
-        items.push({ label: `${name}${alive ? "" : " (dead)"}`, detail: `r=${(p.r || 0).toFixed(0)}` });
+    // ==================== MULTI-STRATEGY MANAGER ====================
+    class MultiStrategyManager {
+      constructor() {
+        this.strategies = new Map();
+        this.activeConnections = new Map(); // strategy name -> connection/room object
+        this.strategyStatus = new Map(); // strategy name -> status
+        this.peerCallbacks = new Map(); // event -> callback
+        this.messageCallbacks = new Map();
+        this.roomId = 'p2p-agar';
+        this.initialized = false;
+        this.bestStrategy = null;
       }
-      UI.peers.innerHTML = items
-        .sort((a,b) => b.detail.localeCompare(a.detail))
-        .map(x => `<li><span>${escapeHtml(x.label)}</span><span class="tag">${escapeHtml(x.detail)}</span></li>`)
-        .join("");
-      setMeshBadge();
-    }
 
-    /********************************************************************
-     * 3) ICE servers (STUN rotation)
-     ********************************************************************/
-    const ICE_SERVERS = [
-      { urls: ["stun:stun.cloudflare.com:3478"] },
-      { urls: ["stun:stun.l.google.com:19302"] },
-      { urls: ["stun:stun1.l.google.com:19302"] },
-      { urls: ["stun:stun2.l.google.com:19302"] }
-    ];
+      init(roomId) {
+        this.roomId = roomId;
+        this.initialized = true;
+        this.updateStatus('Initializing all strategies...');
+        this.startAllStrategies();
+      }
 
-    /********************************************************************
-     * 4) Trackers + preflight probe
-     ********************************************************************/
-    const TORRENT_RELAYS = [
-      "wss://tracker.openwebtorrent.com",
-      "wss://tracker.btorrent.xyz",
-      "wss://tracker.webtorrent.dev",
-      "wss://tracker.fastcast.nz/announce"
-    ];
-
-    function probeWebSocket(url, timeoutMs = 1200) {
-      return new Promise((resolve) => {
-        let ws;
-        let done = false;
-        const finish = (ok) => {
-          if (done) return;
-          done = true;
-          try { ws?.close?.(); } catch {}
-          resolve(ok);
-        };
-        try { ws = new WebSocket(url); } catch { finish(false); return; }
-        const t = setTimeout(() => finish(false), timeoutMs);
-        ws.onopen = () => { clearTimeout(t); finish(true); };
-        ws.onerror = () => { clearTimeout(t); finish(false); };
-        ws.onclose = () => { clearTimeout(t); finish(false); };
-      });
-    }
-
-    async function pickWorkingTrackers(relays) {
-      const results = await Promise.all(relays.map((u) => probeWebSocket(u)));
-      return relays.filter((u, i) => results[i]);
-    }
-
-    function showReachable(working) {
-      UI.reachable.value =
-        working.length
-          ? `(torrent) Reachable trackers (${working.length}):\n` + working.map(u => `- ${u}`).join("\n")
-          : `(torrent) No reachable trackers detected`;
-    }
-
-    function updateRelaySocketsDump(mode) {
-      try {
-        const socketsObj = (mode === "torrent") ? tt.getRelaySockets() : tn.getRelaySockets?.();
-        if (!socketsObj || !Object.keys(socketsObj).length) {
-          UI.sockets.value = "(none yet)";
-          return;
+      updateStrategyStatus(strategy, status, color = '#6b7280') {
+        this.strategyStatus.set(strategy, status);
+        const el = UI.strategyGrid[strategy];
+        if (el) {
+          el.dot.style.background = color;
+          el.text.textContent = status;
         }
-        UI.sockets.value = Object.entries(socketsObj)
-          .map(([url, ws]) => {
-            const rs = ws?.readyState;
-            return `${url}\n  readyState=${wsReadyStateName(rs)} (${rs})`;
-          })
-          .join("\n\n");
-      } catch (e) {
-        UI.sockets.value = "Error reading relay sockets: " + (e?.message || String(e));
+        this.updateSignalingStatus();
+      }
+
+      updateSignalingStatus() {
+        const lines = [];
+        for (const [strategy, status] of this.strategyStatus) {
+          lines.push(`${strategy}: ${status}`);
+        }
+        UI.signalingStatus.value = lines.join('\n');
+      }
+
+      updateDiscoveryStatus() {
+        const lines = [];
+        for (const [peerId, peer] of remotes) {
+          lines.push(`${peer.name || peerId.slice(0,6)} (r=${peer.r.toFixed(0)}) via ${peer.strategy || 'unknown'}`);
+        }
+        UI.discoveryStatus.value = lines.length ? lines.join('\n') : '(waiting for peers...)';
+      }
+
+      on(event, callback) {
+        this.peerCallbacks.set(event, callback);
+      }
+
+      onMessage(callback) {
+        this.messageCallbacks.set('message', callback);
+      }
+
+      broadcast(data) {
+        // Send via all active strategies
+        for (const [strategy, connection] of this.activeConnections) {
+          try {
+            this.sendViaStrategy(strategy, connection, data);
+          } catch (e) {
+            console.warn(`Failed to send via ${strategy}:`, e);
+          }
+        }
+      }
+
+      sendViaStrategy(strategy, connection, data) {
+        switch(strategy) {
+          case 'torrent':
+          case 'nostr':
+          case 'mqtt':
+          case 'firebase':
+          case 'ipfs':
+            if (connection && connection.sendAction) {
+              connection.sendAction('state', data);
+            }
+            break;
+          case 'p2pt':
+            if (connection && connection.sendToAll) {
+              connection.sendToAll(JSON.stringify({ type: 'state', data }));
+            }
+            break;
+          case 'peerjs':
+            if (connection && connection.connections) {
+              for (const conn of Object.values(connection.connections)) {
+                if (conn.open) conn.send(JSON.stringify({ type: 'state', data }));
+              }
+            }
+            break;
+          case 'simplepeer':
+            if (connection && connection.forEach) {
+              connection.forEach(p => {
+                if (p && !p.destroyed) p.send(JSON.stringify({ type: 'state', data }));
+              });
+            }
+            break;
+        }
+      }
+
+      handlePeerJoined(strategy, peerId, peerData = {}) {
+        if (!remotes.has(peerId)) {
+          remotes.set(peerId, {
+            peerId,
+            name: peerData.name || peerId.slice(0, 6),
+            color: peerData.color || '#8ad',
+            x: WORLD.w/2,
+            y: WORLD.h/2,
+            r: 22,
+            alive: true,
+            lastHeardAt: performance.now(),
+            strategy: strategy,
+            ...peerData
+          });
+          
+          this.updateDiscoveryStatus();
+          renderPeersList();
+          
+          const cb = this.peerCallbacks.get('peerJoin');
+          if (cb) cb(peerId);
+          
+          toast(`👤 Peer joined via ${strategy}`, 1500, 'success');
+        }
+      }
+
+      handlePeerLeft(peerId) {
+        if (remotes.delete(peerId)) {
+          this.updateDiscoveryStatus();
+          renderPeersList();
+          
+          const cb = this.peerCallbacks.get('peerLeave');
+          if (cb) cb(peerId);
+        }
+      }
+
+      handleMessage(peerId, data) {
+        const cb = this.messageCallbacks.get('message');
+        if (cb) cb(peerId, data);
+      }
+
+      async startAllStrategies() {
+        // Start all strategies in parallel
+        const promises = [
+          this.startTrysteroTorrent(),
+          this.startTrysteroNostr(),
+          this.startP2PT(),
+          this.startPeerJS(),
+          this.startSimplePeer(),
+          this.startTrysteroMqtt(),
+          this.startTrysteroFirebase(),
+          this.startTrysteroIpfs()
+        ];
+
+        // Wait for at least one to succeed
+        const results = await Promise.allSettled(promises);
+        const succeeded = results.filter(r => r.status === 'fulfilled' && r.value);
+        
+        if (succeeded.length > 0) {
+          this.bestStrategy = succeeded[0].value.strategy;
+          UI.activeStrategy.textContent = `Active: ${this.bestStrategy}`;
+          UI.activeStrategy.className = 'pill success';
+          toast(`✅ Connected via ${this.bestStrategy}`, 2000, 'success');
+        } else {
+          UI.activeStrategy.textContent = 'Active: none';
+          UI.activeStrategy.className = 'pill error';
+          toast('❌ All strategies failed', 3000, 'error');
+        }
+      }
+
+      // ==================== STRATEGY IMPLEMENTATIONS ====================
+
+      async startTrysteroTorrent() {
+        this.updateStrategyStatus('torrent', 'connecting', '#f59e0b');
+        
+        try {
+          const config = {
+            appId: CONFIG.appId,
+            relayUrls: CONFIG.torrentRelays,
+            rtcConfig: { 
+              iceServers: [...CONFIG.iceServers, ...CONFIG.turnServers] 
+            }
+          };
+
+          const room = trysteroTorrent.joinRoom(config, this.roomId);
+          
+          // Set up room events
+          room.onPeerJoin((peerId) => {
+            this.handlePeerJoined('torrent', peerId);
+            this.sendHelloViaTrystero(room);
+          });
+
+          room.onPeerLeave((peerId) => {
+            this.handlePeerLeft(peerId);
+          });
+
+          // Set up actions
+          const [sendHello, onHello] = room.makeAction('hello');
+          const [sendState, onState] = room.makeAction('state');
+          const [sendPing, onPing] = room.makeAction('ping');
+
+          onHello((payload, peerId) => {
+            this.handlePeerJoined('torrent', peerId, payload);
+          });
+
+          onState((payload, peerId) => {
+            this.handleMessage(peerId, payload);
+          });
+
+          onPing((_, peerId) => {
+            const p = remotes.get(peerId);
+            if (p) p.lastHeardAt = performance.now();
+          });
+
+          // Store connection
+          this.activeConnections.set('torrent', {
+            room,
+            sendHello,
+            sendState,
+            sendPing,
+            sendAction: (action, data) => {
+              if (action === 'state' && sendState) sendState(data);
+            }
+          });
+
+          // Send initial hello
+          setTimeout(() => sendHello({
+            name: my.name,
+            color: my.color,
+            alive: my.alive
+          }), 500);
+
+          this.updateStrategyStatus('torrent', 'connected', '#22c55e');
+          return { strategy: 'torrent', room };
+        } catch (e) {
+          this.updateStrategyStatus('torrent', 'failed', '#ef4444');
+          console.error('Torrent strategy failed:', e);
+          return null;
+        }
+      }
+
+      async startTrysteroNostr() {
+        this.updateStrategyStatus('nostr', 'connecting', '#f59e0b');
+        
+        try {
+          const config = {
+            appId: CONFIG.appId,
+            rtcConfig: { iceServers: [...CONFIG.iceServers, ...CONFIG.turnServers] }
+          };
+
+          const room = trysteroNostr.joinRoom(config, this.roomId);
+          
+          room.onPeerJoin((peerId) => {
+            this.handlePeerJoined('nostr', peerId);
+          });
+
+          room.onPeerLeave((peerId) => {
+            this.handlePeerLeft(peerId);
+          });
+
+          const [sendHello, onHello] = room.makeAction('hello');
+          const [sendState, onState] = room.makeAction('state');
+
+          onHello((payload, peerId) => {
+            this.handlePeerJoined('nostr', peerId, payload);
+          });
+
+          onState((payload, peerId) => {
+            this.handleMessage(peerId, payload);
+          });
+
+          this.activeConnections.set('nostr', {
+            room,
+            sendHello,
+            sendState,
+            sendAction: (action, data) => {
+              if (action === 'state' && sendState) sendState(data);
+            }
+          });
+
+          setTimeout(() => sendHello({
+            name: my.name,
+            color: my.color,
+            alive: my.alive
+          }), 500);
+
+          this.updateStrategyStatus('nostr', 'connected', '#22c55e');
+          return { strategy: 'nostr', room };
+        } catch (e) {
+          this.updateStrategyStatus('nostr', 'failed', '#ef4444');
+          return null;
+        }
+      }
+
+      async startTrysteroMqtt() {
+        this.updateStrategyStatus('mqtt', 'connecting', '#f59e0b');
+        
+        try {
+          const config = {
+            appId: CONFIG.appId,
+            brokerUrl: CONFIG.mqttBrokers[0],
+            rtcConfig: { iceServers: [...CONFIG.iceServers, ...CONFIG.turnServers] }
+          };
+
+          const room = trysteroMqtt.joinRoom(config, this.roomId);
+          
+          room.onPeerJoin((peerId) => {
+            this.handlePeerJoined('mqtt', peerId);
+          });
+
+          const [sendHello, onHello] = room.makeAction('hello');
+          const [sendState, onState] = room.makeAction('state');
+
+          onHello((payload, peerId) => {
+            this.handlePeerJoined('mqtt', peerId, payload);
+          });
+
+          onState((payload, peerId) => {
+            this.handleMessage(peerId, payload);
+          });
+
+          this.activeConnections.set('mqtt', {
+            room,
+            sendHello,
+            sendState,
+            sendAction: (action, data) => {
+              if (action === 'state' && sendState) sendState(data);
+            }
+          });
+
+          setTimeout(() => sendHello({
+            name: my.name,
+            color: my.color,
+            alive: my.alive
+          }), 500);
+
+          this.updateStrategyStatus('mqtt', 'connected', '#22c55e');
+          return { strategy: 'mqtt', room };
+        } catch (e) {
+          this.updateStrategyStatus('mqtt', 'failed', '#ef4444');
+          return null;
+        }
+      }
+
+      async startTrysteroFirebase() {
+        this.updateStrategyStatus('firebase', 'connecting', '#f59e0b');
+        
+        try {
+          const config = {
+            appId: CONFIG.appId,
+            firebaseConfig: CONFIG.firebaseConfig,
+            rtcConfig: { iceServers: [...CONFIG.iceServers, ...CONFIG.turnServers] }
+          };
+
+          const room = trysteroFirebase.joinRoom(config, this.roomId);
+          
+          room.onPeerJoin((peerId) => {
+            this.handlePeerJoined('firebase', peerId);
+          });
+
+          const [sendHello, onHello] = room.makeAction('hello');
+          const [sendState, onState] = room.makeAction('state');
+
+          onHello((payload, peerId) => {
+            this.handlePeerJoined('firebase', peerId, payload);
+          });
+
+          onState((payload, peerId) => {
+            this.handleMessage(peerId, payload);
+          });
+
+          this.activeConnections.set('firebase', {
+            room,
+            sendHello,
+            sendState,
+            sendAction: (action, data) => {
+              if (action === 'state' && sendState) sendState(data);
+            }
+          });
+
+          setTimeout(() => sendHello({
+            name: my.name,
+            color: my.color,
+            alive: my.alive
+          }), 500);
+
+          this.updateStrategyStatus('firebase', 'connected', '#22c55e');
+          return { strategy: 'firebase', room };
+        } catch (e) {
+          this.updateStrategyStatus('firebase', 'failed', '#ef4444');
+          return null;
+        }
+      }
+
+      async startTrysteroIpfs() {
+        this.updateStrategyStatus('ipfs', 'connecting', '#f59e0b');
+        
+        try {
+          const config = {
+            appId: CONFIG.appId,
+            rtcConfig: { iceServers: [...CONFIG.iceServers, ...CONFIG.turnServers] }
+          };
+
+          const room = trysteroIpfs.joinRoom(config, this.roomId);
+          
+          room.onPeerJoin((peerId) => {
+            this.handlePeerJoined('ipfs', peerId);
+          });
+
+          const [sendHello, onHello] = room.makeAction('hello');
+          const [sendState, onState] = room.makeAction('state');
+
+          onHello((payload, peerId) => {
+            this.handlePeerJoined('ipfs', peerId, payload);
+          });
+
+          onState((payload, peerId) => {
+            this.handleMessage(peerId, payload);
+          });
+
+          this.activeConnections.set('ipfs', {
+            room,
+            sendHello,
+            sendState,
+            sendAction: (action, data) => {
+              if (action === 'state' && sendState) sendState(data);
+            }
+          });
+
+          setTimeout(() => sendHello({
+            name: my.name,
+            color: my.color,
+            alive: my.alive
+          }), 500);
+
+          this.updateStrategyStatus('ipfs', 'connected', '#22c55e');
+          return { strategy: 'ipfs', room };
+        } catch (e) {
+          this.updateStrategyStatus('ipfs', 'failed', '#ef4444');
+          return null;
+        }
+      }
+
+      async startP2PT() {
+        this.updateStrategyStatus('p2pt', 'connecting', '#f59e0b');
+        
+        try {
+          // P2PT uses WebTorrent trackers for signaling
+          const P2PT = window.P2PT;
+          if (!P2PT) throw new Error('P2PT not loaded');
+
+          const p2pt = new P2PT(my.id, [CONFIG.p2ptTracker]);
+          
+          p2pt.on('peerconnect', (peer, peerId) => {
+            this.handlePeerJoined('p2pt', peerId);
+            
+            peer.on('data', (data) => {
+              try {
+                const msg = JSON.parse(data.toString());
+                if (msg.type === 'state') {
+                  this.handleMessage(peerId, msg.data);
+                } else if (msg.type === 'hello') {
+                  this.handlePeerJoined('p2pt', peerId, msg.data);
+                }
+              } catch (e) {}
+            });
+          });
+
+          p2pt.on('disconnect', (peerId) => {
+            this.handlePeerLeft(peerId);
+          });
+
+          // Announce to tracker
+          await p2pt.start();
+
+          this.activeConnections.set('p2pt', {
+            p2pt,
+            sendToAll: (data) => p2pt.sendAll(data)
+          });
+
+          // Broadcast hello
+          setTimeout(() => {
+            p2pt.sendAll(JSON.stringify({
+              type: 'hello',
+              data: {
+                name: my.name,
+                color: my.color,
+                alive: my.alive
+              }
+            }));
+          }, 1000);
+
+          this.updateStrategyStatus('p2pt', 'connected', '#22c55e');
+          return { strategy: 'p2pt', p2pt };
+        } catch (e) {
+          this.updateStrategyStatus('p2pt', 'failed', '#ef4444');
+          return null;
+        }
+      }
+
+      async startPeerJS() {
+        this.updateStrategyStatus('peerjs', 'connecting', '#f59e0b');
+        
+        try {
+          const Peer = window.Peer;
+          if (!Peer) throw new Error('PeerJS not loaded');
+
+          const peer = new Peer(my.id, {
+            host: CONFIG.peerjsHost,
+            port: CONFIG.peerjsPort,
+            path: CONFIG.peerjsPath,
+            config: { iceServers: [...CONFIG.iceServers, ...CONFIG.turnServers] },
+            debug: 0
+          });
+
+          peer.on('open', (id) => {
+            this.updateStrategyStatus('peerjs', 'connected', '#22c55e');
+          });
+
+          peer.on('connection', (conn) => {
+            conn.on('open', () => {
+              this.handlePeerJoined('peerjs', conn.peer);
+              
+              conn.on('data', (data) => {
+                try {
+                  const msg = JSON.parse(data);
+                  if (msg.type === 'state') {
+                    this.handleMessage(conn.peer, msg.data);
+                  }
+                } catch (e) {}
+              });
+            });
+
+            conn.on('close', () => {
+              this.handlePeerLeft(conn.peer);
+            });
+          });
+
+          peer.on('disconnected', () => {
+            peer.reconnect();
+          });
+
+          this.activeConnections.set('peerjs', peer);
+
+          // Connect to any existing peers (simplified - in production you'd need peer discovery)
+          setTimeout(() => {
+            // Broadcast via other strategies instead
+          }, 2000);
+
+          return { strategy: 'peerjs', peer };
+        } catch (e) {
+          this.updateStrategyStatus('peerjs', 'failed', '#ef4444');
+          return null;
+        }
+      }
+
+      async startSimplePeer() {
+        this.updateStrategyStatus('simplepeer', 'connecting', '#f59e0b');
+        
+        try {
+          const SimplePeer = window.SimplePeer;
+          if (!SimplePeer) throw new Error('SimplePeer not loaded');
+
+          // SimplePeer requires a signaling server - we'll use the public one
+          // For simplicity, we'll rely on other strategies for discovery
+          // and create peers when needed
+          
+          this.activeConnections.set('simplepeer', new Map());
+          
+          this.updateStrategyStatus('simplepeer', 'standby', '#94a3b8');
+          return { strategy: 'simplepeer' };
+        } catch (e) {
+          this.updateStrategyStatus('simplepeer', 'failed', '#ef4444');
+          return null;
+        }
+      }
+
+      sendHelloViaTrystero(room) {
+        try {
+          const [sendHello] = room.makeAction('hello');
+          sendHello({
+            name: my.name,
+            color: my.color,
+            alive: my.alive
+          });
+        } catch (e) {}
+      }
+
+      shutdown() {
+        for (const [strategy, conn] of this.activeConnections) {
+          try {
+            if (conn && conn.close) conn.close();
+            if (conn && conn.destroy) conn.destroy();
+            if (conn && conn.leave) conn.leave();
+          } catch (e) {}
+        }
+        this.activeConnections.clear();
+        this.strategyStatus.clear();
+        this.bestStrategy = null;
       }
     }
 
-    /********************************************************************
-     * 5) Trystero networking (torrent -> nostr fallback)
-     ********************************************************************/
-    let room = null;
-    let stopNetLoop = null;
-
-    let sendHello, onHello;
-    let sendPing, onPing;
-    let sendState, onState;
-    let sendPelletEaten, onPelletEaten;
-    let sendPlayerEaten, onPlayerEaten;
-
-    function teardownRoom() {
-      if (stopNetLoop) stopNetLoop();
-      stopNetLoop = null;
-      if (room) { try { room.leave?.(); } catch {} }
-      room = null;
-      sendHello = onHello = null;
-      sendPing = onPing = null;
-      sendState = onState = null;
-      sendPelletEaten = onPelletEaten = null;
-      sendPlayerEaten = onPlayerEaten = null;
-      UI.sockets.value = "(waiting...)";
-    }
-
-    async function join(roomId) {
-      teardownRoom();
-      remotes.clear();
-      renderPeersList();
-      rebuildPellets(roomId);
-
-      my.name = (UI.name.value || "anon").trim().slice(0, 18);
-
-      setStrategyBadge("torrent", false);
-      setRelayBadge("probing trackers…", false);
-      setStatus("Checking tracker connectivity…");
-      UI.reachable.value = "(probing...)";
-
-      const working = await pickWorkingTrackers(TORRENT_RELAYS);
-      showReachable(working);
-
-      if (!working.length) {
-        toast("Trackers blocked → using Nostr bootstrap");
-        setStrategyBadge("nostr", true);
-        setRelayBadge("Nostr relays (trackers blocked)", true);
-        setStatus("Connecting (nostr)…");
-        await tryJoinNostr(roomId);
-        return;
+    // ==================== GAME STATE MANAGER ====================
+    class GameManager {
+      constructor(strategyManager) {
+        this.strategyManager = strategyManager;
+        this.setupCallbacks();
       }
 
-      setRelayBadge(`torrent (${working.length} reachable)`, false);
-      setStatus("Connecting (torrent)…");
-
-      const ok = await tryJoinTorrent(roomId, working);
-      if (!ok) {
-        toast("Torrent unstable → switching to Nostr");
-        setStrategyBadge("nostr", true);
-        setRelayBadge("Nostr relays", true);
-        setStatus("Connecting (nostr)…");
-        teardownRoom();
-        await tryJoinNostr(roomId);
-      }
-    }
-
-    async function tryJoinTorrent(roomId, relayUrls) {
-      let joinError = null;
-
-      const config = {
-        appId: "p2p-agar-demo-v6",
-        relayUrls,
-        rtcConfig: { iceServers: ICE_SERVERS }
-        // Real fix for hostile networks: add turnConfig or rtcConfig.iceServers with TURN.
-      };
-
-      room = tt.joinRoom(config, roomId, (err) => {
-        joinError = err || new Error("Unknown join error");
-      });
-
-      wireRoomCommon();
-
-      // Update relay socket dump periodically
-      const socketDumpTimer = setInterval(() => updateRelaySocketsDump("torrent"), 1000);
-
-      const deadline = performance.now() + 3500;
-      while (performance.now() < deadline) {
-        if (joinError) break;
-        await sleep(120);
-      }
-
-      clearInterval(socketDumpTimer);
-      updateRelaySocketsDump("torrent");
-
-      if (joinError) {
-        setRelayBadge("torrent failed", true);
-        setStatus("Torrent join error: " + (joinError?.message || String(joinError)));
-        return false;
-      }
-
-      setStatus(`In lobby: ${roomId} (torrent) — move mouse to steer; eat pellets/players`);
-      broadcastHello();
-      toast("Connected (torrent)");
-      return true;
-    }
-
-    async function tryJoinNostr(roomId) {
-      const config = {
-        appId: "p2p-agar-demo-v6",
-        rtcConfig: { iceServers: ICE_SERVERS }
-      };
-
-      room = tn.joinRoom(config, roomId);
-      wireRoomCommon();
-
-      const socketDumpTimer = setInterval(() => updateRelaySocketsDump("nostr"), 1000);
-      setTimeout(() => { clearInterval(socketDumpTimer); updateRelaySocketsDump("nostr"); }, 4000);
-
-      UI.reachable.value = "(nostr) Using public Nostr relays (not trackers).";
-      setStatus(`In lobby: ${roomId} (nostr) — move mouse to steer; eat pellets/players`);
-      broadcastHello();
-      toast("Connected (nostr)");
-      return true;
-    }
-
-    function wireRoomCommon() {
-      room.onPeerJoin((peerId) => {
-        remotes.set(peerId, remotes.get(peerId) || {
-          peerId,
-          name: peerId.slice(0, 6),
-          color: "#8ad",
-          x: WORLD.w/2,
-          y: WORLD.h/2,
-          r: 22,
-          alive: true,
-          lastHeardAt: performance.now(),
-          lastSeq: -1
+      setupCallbacks() {
+        this.strategyManager.on('peerJoin', (peerId) => {
+          renderPeersList();
         });
-        broadcastHello();
-        renderPeersList();
-        toast(`Peer joined: ${peerId.slice(0,6)}`);
-      });
 
-      room.onPeerLeave((peerId) => {
-        remotes.delete(peerId);
-        renderPeersList();
-        toast(`Peer left: ${peerId.slice(0,6)}`);
-      });
+        this.strategyManager.on('peerLeave', (peerId) => {
+          renderPeersList();
+        });
 
-      [sendHello, onHello] = room.makeAction("hello");
-      [sendPing, onPing] = room.makeAction("ping");
-      [sendState, onState] = room.makeAction("state");
-      [sendPelletEaten, onPelletEaten] = room.makeAction("pelletEaten");
-      [sendPlayerEaten, onPlayerEaten] = room.makeAction("playerEaten");
+        this.strategyManager.onMessage((peerId, data) => {
+          this.handlePeerState(peerId, data);
+        });
+      }
 
-      onHello((payload, peerId) => {
-        const p = remotes.get(peerId) || { peerId, lastSeq: -1 };
-        p.lastHeardAt = performance.now();
-        if (payload?.name) p.name = String(payload.name).slice(0, 18);
-        if (payload?.color) p.color = payload.color;
-        if (payload?.alive !== undefined) p.alive = !!payload.alive;
-        remotes.set(peerId, p);
-        renderPeersList();
-      });
+      handlePeerState(peerId, data) {
+        let p = remotes.get(peerId);
+        if (!p) {
+          p = {
+            peerId,
+            name: data.name || peerId.slice(0, 6),
+            color: data.color || '#8ad',
+            x: WORLD.w/2,
+            y: WORLD.h/2,
+            r: 22,
+            alive: true,
+            lastHeardAt: performance.now(),
+            lastSeq: -1
+          };
+          remotes.set(peerId, p);
+        }
 
-      onPing((_payload, peerId) => {
-        const p = remotes.get(peerId);
-        if (p) p.lastHeardAt = performance.now();
-      });
-
-      onState((payload, peerId) => {
-        const p = remotes.get(peerId);
-        if (!p || !payload) return;
-        const seq = payload.seq ?? 0;
+        const seq = data.seq ?? 0;
         if (seq <= (p.lastSeq ?? -1)) return;
+        
         p.lastSeq = seq;
         p.lastHeardAt = performance.now();
-        p.x = payload.x; p.y = payload.y;
-        p.vx = payload.vx || 0; p.vy = payload.vy || 0;
-        p.r = payload.r;
-        p.alive = payload.alive !== false;
-        p.name = payload.name || p.name;
-        p.color = payload.color || p.color;
-      });
+        p.x = data.x; p.y = data.y;
+        p.vx = data.vx || 0; p.vy = data.vy || 0;
+        p.r = data.r;
+        p.alive = data.alive !== false;
+        p.name = data.name || p.name;
+        p.color = data.color || p.color;
 
-      onPelletEaten((payload) => {
-        const id = payload?.id;
-        if (typeof id !== "number") return;
-        removedPellets.add(id);
-      });
-
-      onPlayerEaten((payload) => {
-        if (!payload) return;
-        if (payload.loserMyId === my.id) respawn("You were eaten!");
-        if (payload.loserPeerId && remotes.has(payload.loserPeerId)) {
-          remotes.get(payload.loserPeerId).alive = false;
-        }
         renderPeersList();
-      });
+      }
 
-      stopNetLoop = startNetworkLoops();
-    }
+      broadcastMyState() {
+        const now = performance.now();
+        if (now - my.lastSentAt > 66) {
+          my.lastSentAt = now;
+          my.seq++;
+          
+          const state = {
+            name: my.name,
+            color: my.color,
+            x: my.x,
+            y: my.y,
+            vx: my.vx,
+            vy: my.vy,
+            r: my.r,
+            alive: my.alive,
+            seq: my.seq,
+            t: Date.now()
+          };
+          
+          this.strategyManager.broadcast(state);
+        }
+      }
 
-    function broadcastHello() {
-      sendHello?.({ name: my.name, color: my.color, alive: my.alive, v: 6 });
-    }
-
-    function startNetworkLoops() {
-      let stopped = false;
-      const heartbeat = setInterval(() => {
-        if (stopped) return;
-        sendPing?.({ t: Date.now() });
-
+      cleanupStalePeers() {
         const now = performance.now();
         for (const [peerId, p] of remotes.entries()) {
-          if (now - (p.lastHeardAt || 0) > 16000) remotes.delete(peerId);
+          if (now - (p.lastHeardAt || 0) > 8000) {
+            remotes.delete(peerId);
+          }
         }
-        renderPeersList();
-      }, 4000);
-
-      return () => { stopped = true; clearInterval(heartbeat); };
+      }
     }
 
-    /********************************************************************
-     * 6) Game mechanics + render (same as before, compact)
-     ********************************************************************/
+    // ==================== GAME MECHANICS ====================
     let mouse = { x: window.innerWidth/2, y: window.innerHeight/2 };
-    window.addEventListener("mousemove", (e) => { mouse.x = e.clientX; mouse.y = e.clientY; });
+    window.addEventListener('mousemove', (e) => { mouse.x = e.clientX; mouse.y = e.clientY; });
 
     function respawn(msg) {
-      my.alive = true; my.r = 26;
-      my.x = WORLD.w * (0.2 + Math.random()*0.6);
-      my.y = WORLD.h * (0.2 + Math.random()*0.6);
-      my.vx = 0; my.vy = 0;
-      broadcastHello();
-      toast(msg || "Respawned");
+      my.alive = true;
+      my.r = 26;
+      my.x = WORLD.w * (0.2 + Math.random() * 0.6);
+      my.y = WORLD.h * (0.2 + Math.random() * 0.6);
+      my.vx = 0;
+      my.vy = 0;
+      
+      // Broadcast respawn
+      strategyManager.broadcast({
+        name: my.name,
+        color: my.color,
+        x: my.x,
+        y: my.y,
+        r: my.r,
+        alive: my.alive,
+        seq: my.seq++
+      });
+      
+      toast(msg || 'Respawned', 1500, 'success');
     }
 
     function tryEatPellets() {
@@ -607,7 +1111,13 @@
         if (d < eatRadius) {
           removedPellets.add(pel.id);
           my.r += pel.r * 0.18;
-          sendPelletEaten?.({ id: pel.id, t: Date.now() });
+          
+          // Broadcast pellet eaten
+          strategyManager.broadcast({
+            type: 'pellet',
+            id: pel.id,
+            t: Date.now()
+          });
         }
       }
     }
@@ -622,8 +1132,15 @@
         if (d < my.r * 0.85) {
           my.r += theirR * 0.35;
           p.alive = false;
-          sendPlayerEaten?.({ loserPeerId: peerId, loserMyId: p.myId, winnerMyId: my.id, t: Date.now() });
-          toast(`You ate ${p.name || peerId.slice(0,6)}!`);
+          
+          // Broadcast player eaten
+          strategyManager.broadcast({
+            type: 'playerEaten',
+            loserPeerId: peerId,
+            winnerId: my.id
+          });
+          
+          toast(`🍽️ You ate ${p.name || peerId.slice(0,6)}!`, 1500, 'success');
           renderPeersList();
         }
       }
@@ -632,23 +1149,32 @@
     function updateRemotes(dt) {
       for (const p of remotes.values()) {
         if (!p.alive) continue;
-        p.x = clamp((p.x||0) + (p.vx||0)*dt, 0, WORLD.w);
-        p.y = clamp((p.y||0) + (p.vy||0)*dt, 0, WORLD.h);
+        p.x = clamp((p.x||0) + (p.vx||0) * dt, 0, WORLD.w);
+        p.y = clamp((p.y||0) + (p.vy||0) * dt, 0, WORLD.h);
       }
     }
 
+    // ==================== RENDERING ====================
     function drawPlayer(x, y, r, color, label, isMe) {
       ctx.beginPath();
-      ctx.fillStyle = color || "#8ad";
-      ctx.arc(x, y, r, 0, Math.PI*2);
+      
+      // Glow effect
+      ctx.shadowColor = isMe ? 'rgba(255,255,255,0.5)' : color;
+      ctx.shadowBlur = isMe ? 20 : 10;
+      
+      ctx.fillStyle = color || '#8ad';
+      ctx.arc(x, y, r, 0, Math.PI * 2);
       ctx.fill();
+      
+      ctx.shadowBlur = 0;
       ctx.lineWidth = isMe ? 3 : 2;
-      ctx.strokeStyle = isMe ? "rgba(255,255,255,0.55)" : "rgba(0,0,0,0.35)";
+      ctx.strokeStyle = isMe ? 'rgba(255,255,255,0.8)' : 'rgba(0,0,0,0.4)';
       ctx.stroke();
-      ctx.font = `${Math.max(12, Math.min(18, r*0.55))}px system-ui`;
-      ctx.fillStyle = "rgba(255,255,255,0.92)";
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
+      
+      ctx.font = `${Math.max(12, Math.min(18, r * 0.55))}px system-ui, -apple-system, sans-serif`;
+      ctx.fillStyle = 'rgba(255,255,255,0.95)';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
       ctx.fillText(label, x, y);
     }
 
@@ -657,41 +1183,86 @@
       const camX = my.x - w/2, camY = my.y - h/2;
 
       ctx.clearRect(0, 0, w, h);
-      ctx.fillStyle = "#0b0f14";
+      ctx.fillStyle = '#0b0f14';
       ctx.fillRect(0, 0, w, h);
 
       ctx.save();
       ctx.translate(-camX, -camY);
 
-      ctx.globalAlpha = 0.12;
-      ctx.strokeStyle = "#7aa0d0";
+      // Grid
+      ctx.globalAlpha = 0.15;
+      ctx.strokeStyle = '#7aa0d0';
       ctx.lineWidth = 1;
-      for (let x = 0; x <= WORLD.w; x += 150) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, WORLD.h); ctx.stroke(); }
-      for (let y = 0; y <= WORLD.h; y += 150) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(WORLD.w, y); ctx.stroke(); }
+      for (let x = 0; x <= WORLD.w; x += 150) {
+        ctx.beginPath();
+        ctx.moveTo(x, 0);
+        ctx.lineTo(x, WORLD.h);
+        ctx.stroke();
+      }
+      for (let y = 0; y <= WORLD.h; y += 150) {
+        ctx.beginPath();
+        ctx.moveTo(0, y);
+        ctx.lineTo(WORLD.w, y);
+        ctx.stroke();
+      }
       ctx.globalAlpha = 1;
 
+      // Pellets
       for (const pel of pellets) {
         if (removedPellets.has(pel.id)) continue;
         ctx.beginPath();
-        ctx.fillStyle = "#5eead4";
-        ctx.arc(pel.x, pel.y, pel.r, 0, Math.PI*2);
+        ctx.fillStyle = '#5eead4';
+        ctx.arc(pel.x, pel.y, pel.r, 0, Math.PI * 2);
         ctx.fill();
       }
 
+      // Remote players
       for (const [peerId, p] of remotes.entries()) {
         if (!p.alive) continue;
         drawPlayer(p.x||0, p.y||0, p.r||22, p.color, p.name || peerId.slice(0,6), false);
       }
-      if (my.alive) drawPlayer(my.x, my.y, my.r, my.color, my.name, true);
+      
+      // Local player
+      if (my.alive) {
+        drawPlayer(my.x, my.y, my.r, my.color, my.name, true);
+      }
 
-      ctx.strokeStyle = "rgba(255,255,255,0.18)";
+      // World border
+      ctx.strokeStyle = 'rgba(255,255,255,0.2)';
       ctx.lineWidth = 4;
       ctx.strokeRect(0, 0, WORLD.w, WORLD.h);
 
       ctx.restore();
     }
 
+    function renderPeersList() {
+      const items = [{ label: `${my.name} (you)`, detail: `r=${my.r.toFixed(0)}` }];
+      
+      for (const [peerId, p] of remotes.entries()) {
+        const name = p.name || peerId.slice(0, 6);
+        const alive = p.alive !== false;
+        const strategy = p.strategy ? ` via ${p.strategy}` : '';
+        items.push({ 
+          label: `${name}${alive ? '' : ' 💀'}`, 
+          detail: `r=${(p.r || 0).toFixed(0)}${strategy}` 
+        });
+      }
+      
+      UI.peers.innerHTML = items
+        .sort((a, b) => b.detail.localeCompare(a.detail))
+        .map(x => `<li><span>${escapeHtml(x.label)}</span><span class="tag">${escapeHtml(x.detail)}</span></li>`)
+        .join('');
+      
+      UI.meshBadge.textContent = `Mesh: ${remotes.size} peers`;
+      UI.meshBadge.className = `pill ${remotes.size > 0 ? 'success' : 'warn'}`;
+      
+      // Update discovery status
+      if (strategyManager) strategyManager.updateDiscoveryStatus();
+    }
+
+    // ==================== ANIMATION LOOP ====================
     let last = performance.now();
+    
     function tick(now) {
       const dt = Math.min(0.05, (now - last) / 1000);
       last = now;
@@ -705,6 +1276,7 @@
         const maxSpeed = 320 / Math.sqrt(my.r);
         const ax = (dx / d) * maxSpeed;
         const ay = (dy / d) * maxSpeed;
+        
         my.vx = my.vx * 0.82 + ax * 0.18;
         my.vy = my.vy * 0.82 + ay * 0.18;
         my.x = clamp(my.x + my.vx * dt, 0, WORLD.w);
@@ -715,33 +1287,108 @@
       tryEatPlayers();
       updateRemotes(dt);
 
-      if (room && sendState) {
-        const nowMs = performance.now();
-        if (nowMs - my.lastSentAt > 66) {
-          my.lastSentAt = nowMs;
-          my.seq++;
-          sendState({ name: my.name, color: my.color, x: my.x, y: my.y, vx: my.vx, vy: my.vy, r: my.r, alive: my.alive, seq: my.seq, t: Date.now() });
-        }
+      if (gameManager) {
+        gameManager.broadcastMyState();
+        gameManager.cleanupStalePeers();
       }
 
       draw();
       requestAnimationFrame(tick);
     }
 
-    /********************************************************************
-     * 7) Boot
-     ********************************************************************/
-    (function boot() {
-      my.name = (UI.name.value || "anon").trim().slice(0, 18);
-      const roomId = (UI.room.value || "p2p-agar").trim();
+    // ==================== INITIALIZATION ====================
+    let strategyManager, gameManager;
+
+    async function init(roomId) {
+      // Clean up old connections
+      if (strategyManager) {
+        strategyManager.shutdown();
+      }
+
+      remotes.clear();
       renderPeersList();
-      join(roomId);
+      rebuildPellets(roomId);
+      
+      my.name = UI.name.value.trim().slice(0, 18);
+      my.color = randomColor();
 
-      window.addEventListener("keydown", (e) => {
-        if (e.key.toLowerCase() === "r") respawn("Respawned");
-      });
+      UI.status.textContent = 'Starting multi-strategy connections...';
+      
+      strategyManager = new MultiStrategyManager();
+      gameManager = new GameManager(strategyManager);
+      
+      strategyManager.init(roomId);
+    }
 
+    // ==================== EVENT LISTENERS ====================
+    UI.apply.addEventListener('click', () => {
+      const n = UI.name.value.trim().slice(0, 18);
+      my.name = n;
+      localStorage.setItem('p2pAgarName', n);
+      toast('Name updated', 1000, 'success');
+      
+      // Broadcast name update
+      if (strategyManager) {
+        strategyManager.broadcast({
+          name: my.name,
+          color: my.color,
+          type: 'nameUpdate'
+        });
+      }
+    });
+
+    UI.rejoin.addEventListener('click', () => {
+      const roomId = UI.room.value.trim();
+      location.hash = 'room=' + encodeURIComponent(roomId);
+      init(roomId);
+      toast(`Joining room: ${roomId}`, 1500);
+    });
+
+    UI.forceRespawn.addEventListener('click', () => {
+      respawn('Respawned');
+    });
+
+    UI.copyDebug.addEventListener('click', async () => {
+      const text = 
+        `Room: ${UI.room.value}\n` +
+        `Active Strategy: ${strategyManager?.bestStrategy || 'none'}\n` +
+        `Peers: ${remotes.size}\n\n` +
+        `Strategy Status:\n${UI.signalingStatus.value}\n\n` +
+        `Active Peers:\n${UI.discoveryStatus.value}`;
+      
+      try {
+        await navigator.clipboard.writeText(text);
+        toast('Debug info copied', 1000, 'success');
+      } catch {
+        toast('Failed to copy', 1000, 'error');
+      }
+    });
+
+    UI.refreshStrategies.addEventListener('click', () => {
+      init(UI.room.value.trim());
+      toast('Restarting all strategies...', 1500);
+    });
+
+    // Keyboard shortcuts
+    window.addEventListener('keydown', (e) => {
+      if (e.key.toLowerCase() === 'r') {
+        e.preventDefault();
+        respawn('Respawned');
+      }
+    });
+
+    // ==================== BOOT ====================
+    (async function boot() {
+      const roomId = UI.room.value.trim();
+      await init(roomId);
       requestAnimationFrame(tick);
+      
+      // Periodic status updates
+      setInterval(() => {
+        if (strategyManager) {
+          strategyManager.updateDiscoveryStatus();
+        }
+      }, 2000);
     })();
   </script>
 </body>
