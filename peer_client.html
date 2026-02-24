@@ -1,0 +1,2111 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>P2P Peer Client</title>
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+  <meta http-equiv="Pragma" content="no-cache" />
+  <meta http-equiv="Expires" content="0" />
+
+  <script src="https://js.puter.com/v2/"></script>
+
+  <style>
+    :root{
+      --bg:#070b16;
+      --panel:rgba(255,255,255,.04);
+      --panel-2:rgba(255,255,255,.03);
+      --line:rgba(255,255,255,.09);
+      --line-2:rgba(255,255,255,.06);
+      --text:#e5e7eb;
+      --muted:#94a3b8;
+      --brand:#7c3aed;
+      --brand2:#06b6d4;
+      --ok:#22c55e;
+      --err:#ef4444;
+      --warn:#f59e0b;
+      --shadow: 0 10px 30px rgba(0,0,0,.25);
+      --radius:16px;
+    }
+    *{box-sizing:border-box}
+    html,body{height:100%;margin:0}
+    body{
+      color:var(--text);
+      font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;
+      background:
+        radial-gradient(900px 400px at 10% -10%, rgba(124,58,237,.20), transparent 60%),
+        radial-gradient(900px 500px at 95% 0%, rgba(6,182,212,.14), transparent 60%),
+        linear-gradient(180deg,#030712,#0b1020);
+      overflow:hidden;
+    }
+
+    .app{
+      height:100%;
+      display:grid;
+      grid-template-columns: 340px 1fr;
+      gap:12px;
+      padding:12px;
+    }
+
+    .panel,.main{
+      border:1px solid var(--line);
+      background:var(--panel);
+      border-radius:18px;
+      backdrop-filter: blur(10px);
+      overflow:hidden;
+      box-shadow: var(--shadow);
+      min-width:0;
+      min-height:0;
+    }
+
+    .panel{ display:flex; flex-direction:column; }
+    .main{
+      display:grid;
+      grid-template-rows:auto auto 1fr auto;
+      min-height:0;
+    }
+
+    .sec{
+      padding:12px;
+      border-bottom:1px solid var(--line-2);
+    }
+    .sec:last-child{border-bottom:none}
+
+    .title{
+      margin:0 0 8px;
+      font-size:13px;
+      letter-spacing:.03em;
+      text-transform:uppercase;
+      color:#dbeafe;
+      opacity:.95;
+      font-weight:700;
+    }
+
+    .row{display:flex; gap:8px; flex-wrap:wrap}
+    .row > *{min-width:0}
+
+    input,button{
+      border-radius:12px;
+      border:1px solid rgba(255,255,255,.12);
+      color:var(--text);
+      font-size:13px;
+      padding:10px 12px;
+      background:rgba(255,255,255,.03);
+      outline:none;
+      transition:.16s ease;
+    }
+    input:focus{
+      border-color: rgba(124,58,237,.7);
+      box-shadow: 0 0 0 3px rgba(124,58,237,.16);
+    }
+    button{
+      cursor:pointer;
+      border:none;
+      font-weight:600;
+      background:linear-gradient(90deg,var(--brand),var(--brand2));
+      box-shadow:0 6px 18px rgba(124,58,237,.2);
+    }
+    button:hover{filter:brightness(1.06)}
+    button:active{transform:translateY(1px)}
+    button.secondary{
+      background:rgba(255,255,255,.04);
+      border:1px solid rgba(255,255,255,.12);
+      box-shadow:none;
+    }
+    button.danger{
+      background:linear-gradient(90deg,#b91c1c,#ef4444);
+    }
+    button.ghost{
+      background:transparent;
+      border:1px dashed rgba(255,255,255,.16);
+      box-shadow:none;
+    }
+
+    .status{
+      display:flex;
+      align-items:center;
+      gap:8px;
+      margin-top:8px;
+      border:1px solid rgba(255,255,255,.10);
+      background:rgba(255,255,255,.02);
+      border-radius:12px;
+      padding:10px 12px;
+      font-size:12px;
+      min-height:38px;
+    }
+    .statusDot{
+      width:8px;height:8px;border-radius:999px;flex:0 0 auto;
+      background:#64748b;
+      box-shadow:0 0 0 5px rgba(100,116,139,.12);
+    }
+    .status.ok .statusDot{
+      background:var(--ok);
+      box-shadow:0 0 0 5px rgba(34,197,94,.14);
+    }
+    .status.err .statusDot{
+      background:var(--err);
+      box-shadow:0 0 0 5px rgba(239,68,68,.14);
+    }
+    .status.warn .statusDot{
+      background:var(--warn);
+      box-shadow:0 0 0 5px rgba(245,158,11,.14);
+    }
+
+    .chipRow{display:flex; gap:8px; flex-wrap:wrap}
+    .chip{
+      display:inline-flex; align-items:center; gap:6px;
+      border-radius:999px;
+      padding:5px 10px;
+      border:1px solid rgba(255,255,255,.10);
+      background:rgba(255,255,255,.02);
+      font-size:11px;
+      color:#cbd5e1;
+    }
+
+    .stats{
+      display:grid;
+      grid-template-columns:1fr 1fr;
+      gap:8px;
+    }
+    .stat{
+      border:1px solid rgba(255,255,255,.08);
+      border-radius:12px;
+      padding:10px;
+      background:var(--panel-2);
+    }
+    .stat .k{font-size:11px;color:var(--muted)}
+    .stat .v{margin-top:4px;font-weight:700;font-size:14px}
+
+    .searchWrap{display:flex; gap:8px}
+    .searchWrap input{flex:1}
+
+    .peerList{
+      flex:1;
+      overflow:auto;
+      padding:8px;
+    }
+    .peer{
+      border:1px solid rgba(255,255,255,.08);
+      border-radius:12px;
+      padding:10px;
+      margin-bottom:8px;
+      background:rgba(255,255,255,.02);
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap:8px;
+      cursor:pointer;
+      transition:.14s ease;
+    }
+    .peer:hover{background:rgba(255,255,255,.035)}
+    .peer.active{
+      border-color:rgba(124,58,237,.45);
+      background:rgba(124,58,237,.14);
+      box-shadow: inset 0 0 0 1px rgba(124,58,237,.15);
+    }
+    .peer .name{
+      font-weight:600;
+      font-size:13px;
+      line-height:1.2;
+    }
+    .peer .sub{
+      color:var(--muted);
+      font-size:11px;
+      margin-top:3px;
+    }
+    .badge{
+      border-radius:999px;
+      padding:4px 8px;
+      border:1px solid rgba(255,255,255,.12);
+      font-size:10px;
+      white-space:nowrap;
+      color:#dbeafe;
+      background:rgba(255,255,255,.03);
+    }
+
+    .headerBar{
+      padding:12px;
+      border-bottom:1px solid var(--line-2);
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap:8px;
+      flex-wrap:wrap;
+    }
+    .headerTitle{
+      font-weight:700; font-size:15px;
+    }
+    .headerMeta{
+      display:flex; gap:8px; flex-wrap:wrap; align-items:center;
+    }
+    .pill{
+      display:inline-flex; align-items:center; gap:6px;
+      padding:5px 9px;
+      border-radius:999px;
+      border:1px solid rgba(255,255,255,.10);
+      background:rgba(255,255,255,.02);
+      font-size:11px;
+      color:#dbeafe;
+    }
+    .hdrActions{
+      display:flex; gap:8px; flex-wrap:wrap;
+    }
+
+    .videos{
+      display:grid;
+      grid-template-columns:1fr 1fr;
+      gap:10px;
+      padding:12px;
+      border-bottom:1px solid var(--line-2);
+    }
+    .videoCard{
+      border:1px solid rgba(255,255,255,.08);
+      border-radius:14px;
+      padding:8px;
+      background:rgba(255,255,255,.02);
+      min-width:0;
+    }
+    .videoTop{
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap:8px;
+      margin-bottom:8px;
+    }
+    .videoTop .lbl{
+      font-size:11px;
+      color:var(--muted);
+      letter-spacing:.02em;
+    }
+    .videoFrame{
+      width:100%;
+      aspect-ratio:1 / 1;
+      border-radius:10px;
+      overflow:hidden;
+      background:#000;
+      position:relative;
+      border:1px solid rgba(255,255,255,.06);
+    }
+    .videoFrame video{
+      width:100%;
+      height:100%;
+      object-fit:cover;
+      object-position:center;
+      background:#000;
+      display:block;
+    }
+    .videoEmpty{
+      position:absolute; inset:0;
+      display:flex; align-items:center; justify-content:center;
+      color:#94a3b8; font-size:12px;
+      pointer-events:none;
+    }
+    .iconBtn{
+      border:1px solid rgba(255,255,255,.12);
+      background:rgba(255,255,255,.03);
+      border-radius:10px;
+      padding:6px 9px;
+      font-size:11px;
+      color:var(--text);
+      cursor:pointer;
+    }
+
+    .chatWrap{
+      min-height:0;
+      display:grid;
+      grid-template-rows: 1fr auto;
+    }
+
+    .chatHistory{
+      min-height:0;
+      overflow:auto;
+      padding:12px;
+      background:
+        linear-gradient(180deg, rgba(2,6,23,.35), rgba(2,6,23,.55));
+    }
+
+    .daySep{
+      text-align:center;
+      color:var(--muted);
+      font-size:11px;
+      margin:10px 0 12px;
+      position:relative;
+    }
+    .daySep::before,.daySep::after{
+      content:"";
+      position:absolute;
+      top:50%;
+      width:32%;
+      height:1px;
+      background:rgba(255,255,255,.06);
+    }
+    .daySep::before{left:0}
+    .daySep::after{right:0}
+
+    .msg{
+      display:flex;
+      margin-bottom:10px;
+      gap:8px;
+    }
+    .msg.me{justify-content:flex-end}
+    .msg.system{justify-content:center}
+    .msg.system .bubble{
+      max-width:90%;
+      background:rgba(255,255,255,.03);
+      border:1px solid rgba(255,255,255,.08);
+      color:#cbd5e1;
+      font-size:12px;
+    }
+
+    .bubble{
+      max-width:min(78%, 650px);
+      border-radius:14px;
+      border:1px solid rgba(255,255,255,.08);
+      background:rgba(255,255,255,.03);
+      padding:8px 10px;
+      box-shadow:0 4px 14px rgba(0,0,0,.12);
+      min-width:140px;
+    }
+    .msg.me .bubble{
+      background:linear-gradient(135deg, rgba(124,58,237,.22), rgba(6,182,212,.16));
+      border-color:rgba(124,58,237,.26);
+    }
+    .msg.peer .bubble{
+      background:rgba(255,255,255,.03);
+    }
+
+    .metaLine{
+      display:flex; align-items:center; justify-content:space-between; gap:8px;
+      margin-bottom:4px;
+      font-size:10px;
+      color:#bfdbfe;
+    }
+    .metaLine .who{
+      color:#dbeafe;
+      font-weight:600;
+      overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+    }
+    .metaLine .time{
+      color:var(--muted);
+      flex:0 0 auto;
+    }
+    .msgText{
+      white-space:pre-wrap;
+      word-break:break-word;
+      font-size:13px;
+      line-height:1.35;
+      color:var(--text);
+    }
+
+    .fileCard{
+      margin-top:6px;
+      border:1px solid rgba(255,255,255,.08);
+      border-radius:12px;
+      padding:8px;
+      background:rgba(255,255,255,.02);
+    }
+    .fileTop{
+      display:flex; justify-content:space-between; gap:8px; align-items:center;
+      font-size:12px;
+    }
+    .fileName{font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+    .fileSize{color:var(--muted); font-size:11px; white-space:nowrap}
+    .fileState{
+      margin-top:6px; font-size:11px; color:var(--muted);
+      display:flex; align-items:center; justify-content:space-between; gap:8px; flex-wrap:wrap;
+    }
+    .fileActions{ display:flex; gap:6px; flex-wrap:wrap; }
+    .miniBtn{
+      padding:5px 8px;
+      border-radius:8px;
+      font-size:11px;
+      border:1px solid rgba(255,255,255,.12);
+      background:rgba(255,255,255,.03);
+      color:var(--text);
+      cursor:pointer;
+    }
+
+    .composer{
+      border-top:1px solid var(--line-2);
+      padding:10px;
+      display:grid;
+      grid-template-columns: 1fr auto;
+      gap:8px;
+      background:rgba(2,6,23,.22);
+    }
+    .composerTop{
+      display:flex; gap:8px; align-items:center;
+      grid-column:1 / -1;
+      flex-wrap:wrap;
+    }
+    .composer input[type="text"]{ width:100%; }
+    .composerMain{
+      display:flex; gap:8px;
+      grid-column:1 / -1;
+    }
+    .composerMain input[type="text"]{ flex:1; }
+    .composerFile{
+      display:flex; gap:8px; align-items:center; flex-wrap:wrap;
+    }
+    .composer input[type="file"]{
+      border:none;
+      background:transparent;
+      padding:0;
+      font-size:12px;
+    }
+
+    .incomingBar{
+      display:none;
+      margin-top:8px;
+      border:1px solid rgba(245,158,11,.28);
+      background:rgba(245,158,11,.08);
+      border-radius:12px;
+      padding:10px;
+      font-size:12px;
+      align-items:center;
+      justify-content:space-between;
+      gap:8px;
+      flex-wrap:wrap;
+    }
+    .incomingBar.show{display:flex}
+
+    .muted{color:var(--muted); font-size:12px}
+
+    @media (max-width: 1024px){
+      .app{
+        grid-template-columns:1fr;
+        grid-template-rows: 44% 56%;
+      }
+      .videos{
+        grid-template-columns:1fr 1fr;
+      }
+    }
+    @media (max-width: 760px){
+      .videos{grid-template-columns:1fr}
+      .hdrActions{width:100%}
+      .hdrActions button{flex:1}
+      .bubble{max-width:90%}
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <!-- SIDEBAR -->
+    <aside class="panel">
+      <div class="sec">
+        <div class="title">Status</div>
+        <div class="chipRow">
+          <span class="chip" id="seedChip">Seeds: 0</span>
+          <span class="chip" id="peerChip">Peers: 0</span>
+        </div>
+        <div id="netStatus" class="status warn">
+          <span class="statusDot"></span>
+          <span id="netStatusText">Connecting…</span>
+        </div>
+      </div>
+
+      <div class="sec">
+        <div class="title">Identity</div>
+        <div class="row">
+          <input id="identityInput" placeholder="Your name" style="flex:1" />
+        </div>
+        <div class="row" style="margin-top:8px">
+          <button onclick="saveIdentity()">Save</button>
+          <button class="secondary" onclick="enableMedia()">Camera</button>
+          <button class="secondary" onclick="autoLogin(true)">Reconnect</button>
+          <button class="danger" onclick="logoutAll()">Offline</button>
+        </div>
+        <div id="idStatus" class="status">
+          <span class="statusDot"></span>
+          <span id="idStatusText">Offline</span>
+        </div>
+
+        <div id="incomingBar" class="incomingBar">
+          <div id="incomingText">Incoming request</div>
+          <div class="row" style="gap:6px">
+            <button class="secondary" onclick="acceptIncoming('data')">Accept Chat</button>
+            <button onclick="acceptIncoming('media')">Accept Call</button>
+            <button class="danger" onclick="rejectIncoming()">Reject</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="sec">
+        <div class="title">Peers</div>
+        <div class="searchWrap">
+          <input id="peerSearch" placeholder="Search peers…" oninput="renderPeers()" />
+          <button class="secondary" onclick="refreshPeersNow()">↻</button>
+        </div>
+        <div class="stats" style="margin-top:8px">
+          <div class="stat"><div class="k">Connected</div><div class="v" id="statSeeds">0</div></div>
+          <div class="stat"><div class="k">Visible</div><div class="v" id="statPeers">0</div></div>
+        </div>
+      </div>
+
+      <div id="peerList" class="peerList">
+        <div class="muted">No peers found.</div>
+      </div>
+    </aside>
+
+    <!-- MAIN -->
+    <main class="main">
+      <div class="headerBar">
+        <div>
+          <div class="headerTitle">P2P Chat & Calls</div>
+          <div class="headerMeta">
+            <span class="pill" id="selfPill">You: -</span>
+            <span class="pill" id="selectedPill">Peer: none</span>
+            <span class="pill" id="sessionPill">Session: idle</span>
+          </div>
+        </div>
+
+        <div class="hdrActions">
+          <button class="secondary" onclick="connectSelectedData()">Connect</button>
+          <button onclick="dialSelectedMedia()">Call</button>
+          <button class="danger" onclick="hangup()">Disconnect</button>
+        </div>
+      </div>
+
+      <div class="videos">
+        <div class="videoCard">
+          <div class="videoTop">
+            <div class="lbl">Local Camera</div>
+            <button class="iconBtn" onclick="toggleFullscreen('localVideoFrame')">Fullscreen</button>
+          </div>
+          <div class="videoFrame" id="localVideoFrame" ondblclick="toggleFullscreen('localVideoFrame')">
+            <video id="localVideo" autoplay muted playsinline></video>
+            <div class="videoEmpty" id="localVideoHint">Camera off</div>
+          </div>
+        </div>
+
+        <div class="videoCard">
+          <div class="videoTop">
+            <div class="lbl">Remote Camera</div>
+            <button class="iconBtn" onclick="toggleFullscreen('remoteVideoFrame')">Fullscreen</button>
+          </div>
+          <div class="videoFrame" id="remoteVideoFrame" ondblclick="toggleFullscreen('remoteVideoFrame')">
+            <video id="remoteVideo" autoplay playsinline></video>
+            <div class="videoEmpty" id="remoteVideoHint">No video</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="chatWrap">
+        <div id="chatHistory" class="chatHistory">
+          <div class="daySep">Today</div>
+        </div>
+
+        <div class="composer">
+          <div class="composerTop">
+            <div class="composerFile">
+              <input id="fileInput" type="file" />
+              <button class="secondary" onclick="sendSelectedFile()">Send File</button>
+            </div>
+            <span class="muted">You can chat/file-share with a peer after Connect or Call.</span>
+          </div>
+
+          <div class="composerMain">
+            <input id="chatText" type="text" placeholder="Type a message…" />
+            <button class="secondary" onclick="sendChat()">Send</button>
+          </div>
+        </div>
+      </div>
+    </main>
+  </div>
+
+<script>
+/* =========================================================
+   CONFIG / STATE
+========================================================= */
+const STARTUP_RELOAD_FLAG = "__p2p_peer_client_reloaded_once__";
+const HEARTBEAT_MS = 5000;
+const NETWORK_REFRESH_MS = 15000;
+const MAX_CONNECTED_SEEDS = 5;
+
+// Internal token/seed discovery (hidden from UI)
+const TOKEN_SCAN_MAX = 999;
+const TOKEN_SCAN_STOP_AFTER_CONSECUTIVE_MISSES = 10;
+const TOKEN_SCAN_BACKOFF_MS = 10000;
+
+// Internal repo (hidden from UI)
+const REPO_CFG = {
+  owner: "ahmed25abbas",
+  repo: "tokens",
+  branch: "main"
+};
+
+const GITHUB_FETCH = { byToken: {} };
+
+const STATE = {
+  seeds: [],
+  connectedSeeds: [],
+  seedPollLoops: new Map(),
+
+  peerId: "",          // hidden numeric id for protocol
+  identity: "",        // user-editable single visible identity (name)
+  online: false,
+  peersById: new Map(),
+  selectedPeer: "",
+
+  incomingCall: null,
+  activeCallId: "",
+  activePeer: "",
+  activeSeedUrl: "",
+  sessionMode: "idle", // idle | data | media
+  outgoingRequestedMode: "data",
+
+  heartbeatTimer: null,
+  networkTickTimer: null,
+
+  localStream: null,
+  remoteStream: null,
+  pc: null,
+
+  chatDc: null,
+  fileDc: null,
+
+  makingOffer: false,
+  polite: false,
+  pendingIce: [],
+
+  fileRecv: {}, // by transfer id
+  fileSendBusy: false,
+
+  chatHistory: [], // rendered timeline entries
+
+  tokenScan: {
+    running: false,
+    missStreak: 0,
+    index: 1,
+    lastCycleStartedAt: 0,
+  }
+};
+
+const RTC_CONFIG = {
+  iceServers: [{ urls: ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"] }]
+};
+
+/* =========================================================
+   UI HELPERS
+========================================================= */
+function $(id){ return document.getElementById(id); }
+
+function setStatus(elId, msg, type="ok"){
+  const root = $(elId);
+  const textEl = $(elId + "Text");
+  if (!root || !textEl) return;
+  root.className = "status " + (type || "ok");
+  textEl.textContent = msg;
+}
+
+function formatTime(ts){
+  try{
+    return new Date(ts).toLocaleTimeString([], {hour:"2-digit", minute:"2-digit"});
+  }catch{
+    return "";
+  }
+}
+
+function formatBytes(n){
+  const x = Number(n)||0;
+  if (x < 1024) return `${x} B`;
+  if (x < 1024*1024) return `${(x/1024).toFixed(1)} KB`;
+  if (x < 1024*1024*1024) return `${(x/1024/1024).toFixed(1)} MB`;
+  return `${(x/1024/1024/1024).toFixed(1)} GB`;
+}
+
+function safeName(s){ return String(s ?? "").trim() || "Unknown"; }
+
+function escapeHtml(s){
+  return String(s ?? "").replace(/[&<>"']/g, c => (
+    {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]
+  ));
+}
+
+function randomNumericId(len=8){
+  let s = "";
+  for (let i=0;i<len;i++) s += Math.floor(Math.random()*10);
+  if (s[0] === "0") s = "1" + s.slice(1);
+  return s;
+}
+
+function sleep(ms){ return new Promise(r => setTimeout(r, ms)); }
+
+function noCacheUrl(url){
+  const u = new URL(url, window.location.href);
+  u.searchParams.set("_cb", `${Date.now()}-${Math.random().toString(36).slice(2,8)}`);
+  return u.toString();
+}
+
+async function fetchJson(url, opts={}){
+  const r = await fetch(url, { cache:"no-store", redirect:"follow", ...opts });
+  const ct = r.headers.get("content-type") || "";
+  const body = ct.includes("application/json") ? await r.json() : await r.text();
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  return body;
+}
+
+async function safePlay(el){
+  try {
+    const p = el?.play?.();
+    if (p && typeof p.then === "function") await p;
+  } catch {}
+}
+
+function updateVideoHints(){
+  $("localVideoHint").style.display = STATE.localStream ? "none" : "flex";
+  const hasRemote = !!($("remoteVideo").srcObject);
+  $("remoteVideoHint").style.display = hasRemote ? "none" : "flex";
+}
+
+function toggleFullscreen(id){
+  const el = $(id);
+  if (!el) return;
+  if (document.fullscreenElement) {
+    document.exitFullscreen?.();
+  } else {
+    el.requestFullscreen?.();
+  }
+}
+
+function updateHeaderPills(){
+  $("selfPill").textContent = `You: ${STATE.peerId}(${STATE.identity || STATE.peerId})`;
+  const p = STATE.selectedPeer ? STATE.peersById.get(STATE.selectedPeer) : null;
+  $("selectedPill").textContent = p
+    ? `Peer: ${p.peer_id}(${p.display_name || p.peer_id})`
+    : "Peer: none";
+  $("sessionPill").textContent = `Session: ${STATE.sessionMode}`;
+}
+
+function updateMiniStats(){
+  $("statSeeds").textContent = String(STATE.connectedSeeds.length);
+  $("statPeers").textContent = String(STATE.peersById.size);
+  $("seedChip").textContent = `Seeds: ${STATE.connectedSeeds.length}`;
+  $("peerChip").textContent = `Peers: ${STATE.peersById.size}`;
+}
+
+function simpleError(prefix, fallback){
+  return `${prefix}: ${fallback || "Something went wrong"}`;
+}
+
+/* =========================================================
+   CHAT HISTORY UI
+========================================================= */
+function addChatEntry(entry){
+  STATE.chatHistory.push(entry);
+  renderChatHistory();
+}
+
+function addSystemMessage(text){
+  addChatEntry({
+    kind: "system",
+    text: String(text || ""),
+    ts: Date.now()
+  });
+}
+
+function whoLabel(me, peer){
+  if (me) return `${STATE.peerId}(${STATE.identity || STATE.peerId})`;
+  if (!peer) return "Peer";
+  return `${peer.peer_id}(${peer.display_name || peer.peer_id})`;
+}
+
+function renderChatHistory(){
+  const root = $("chatHistory");
+  root.innerHTML = `<div class="daySep">Today</div>`;
+
+  for (const m of STATE.chatHistory){
+    const wrap = document.createElement("div");
+    wrap.className = `msg ${m.role || "system"}`;
+
+    if (m.kind === "system"){
+      wrap.innerHTML = `<div class="bubble">${escapeHtml(m.text)}</div>`;
+      root.appendChild(wrap);
+      continue;
+    }
+
+    const metaWho = m.who || (m.role === "me" ? whoLabel(true) : whoLabel(false, m.peer));
+    const time = formatTime(m.ts || Date.now());
+
+    const bubble = document.createElement("div");
+    bubble.className = "bubble";
+
+    let inner = `
+      <div class="metaLine">
+        <div class="who">${escapeHtml(metaWho)}</div>
+        <div class="time">${escapeHtml(time)}</div>
+      </div>
+    `;
+
+    if (m.kind === "chat"){
+      inner += `<div class="msgText">${escapeHtml(m.text || "")}</div>`;
+    }
+
+    if (m.kind === "file"){
+      const rec = m.file || {};
+      const canDownload = !!rec.blob;
+      const fileId = escapeHtml(String(m.id));
+      inner += `
+        <div class="fileCard">
+          <div class="fileTop">
+            <div class="fileName">${escapeHtml(rec.name || "file")}</div>
+            <div class="fileSize">${escapeHtml(formatBytes(rec.size || 0))}</div>
+          </div>
+          <div class="fileState">
+            <span>${escapeHtml(rec.state || "pending")}</span>
+            <div class="fileActions">
+              ${canDownload ? `<button class="miniBtn" onclick="downloadPendingFile('${fileId}')">Download</button>` : ""}
+              ${m.role !== "me" ? `<button class="miniBtn" onclick="toggleKeepPendingFile('${fileId}')">${rec.kept ? "Kept" : "Keep Pending"}</button>` : ""}
+              ${m.role !== "me" ? `<button class="miniBtn" onclick="discardPendingFile('${fileId}')">Discard</button>` : ""}
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    bubble.innerHTML = inner;
+    wrap.appendChild(bubble);
+    root.appendChild(wrap);
+  }
+
+  root.scrollTop = root.scrollHeight;
+}
+
+function findChatEntryById(id){
+  return STATE.chatHistory.find(x => String(x.id) === String(id));
+}
+
+function downloadPendingFile(id){
+  const item = findChatEntryById(id);
+  const f = item?.file;
+  if (!f || !f.blob) return;
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(f.blob);
+  a.download = f.name || "file";
+  a.click();
+  setTimeout(()=> URL.revokeObjectURL(a.href), 30000);
+  f.state = "downloaded";
+  renderChatHistory();
+}
+
+function toggleKeepPendingFile(id){
+  const item = findChatEntryById(id);
+  if (!item?.file) return;
+  item.file.kept = !item.file.kept;
+  if (item.file.kept && item.file.state === "received") item.file.state = "kept in chat";
+  if (!item.file.kept && item.file.state === "kept in chat") item.file.state = "received";
+  renderChatHistory();
+}
+
+function discardPendingFile(id){
+  const item = findChatEntryById(id);
+  if (!item?.file) return;
+  if (item.file.blob && item.file.blobUrl) {
+    try { URL.revokeObjectURL(item.file.blobUrl); } catch {}
+  }
+  item.file.blob = null;
+  item.file.state = "discarded";
+  renderChatHistory();
+}
+
+/* =========================================================
+   STORAGE / IDENTITY (single visible input)
+========================================================= */
+function getStoredIdentity(){
+  try { return JSON.parse(localStorage.getItem("p2p_identity_v2") || "{}"); }
+  catch { return {}; }
+}
+
+function saveStoredIdentity(){
+  try {
+    localStorage.setItem("p2p_identity_v2", JSON.stringify({
+      peerId: STATE.peerId,   // hidden stable numeric id
+      identity: STATE.identity
+    }));
+  } catch {}
+}
+
+function ensureIdentity(){
+  const saved = getStoredIdentity();
+  STATE.peerId = (/^\d{6,14}$/.test(saved.peerId || "")) ? saved.peerId : randomNumericId(8);
+  STATE.identity = safeName(saved.identity || "").slice(0, 40);
+  if (!STATE.identity || STATE.identity === "Unknown") STATE.identity = `User${STATE.peerId.slice(-4)}`;
+
+  $("identityInput").value = STATE.identity;
+  saveStoredIdentity();
+  updateHeaderPills();
+}
+
+function saveIdentity(){
+  const typed = safeName($("identityInput").value).slice(0,40);
+  STATE.identity = typed;
+  $("identityInput").value = STATE.identity;
+  saveStoredIdentity();
+  updateHeaderPills();
+  setStatus("idStatus", `Saved as ${STATE.identity}`, "ok");
+}
+
+/* =========================================================
+   ONE-TIME STARTUP CACHE CLEAR + RELOAD
+========================================================= */
+async function clearCachesOnceAndReload(){
+  try {
+    if ("caches" in window) {
+      const keys = await caches.keys();
+      await Promise.all(keys.map(k => caches.delete(k)));
+    }
+    if ("serviceWorker" in navigator) {
+      const regs = await navigator.serviceWorker.getRegistrations();
+      await Promise.all(regs.map(r => r.unregister()));
+    }
+  } catch {}
+
+  if (!sessionStorage.getItem(STARTUP_RELOAD_FLAG)) {
+    sessionStorage.setItem(STARTUP_RELOAD_FLAG, "1");
+    window.location.replace(noCacheUrl(window.location.href));
+    return false;
+  }
+  return true;
+}
+
+/* =========================================================
+   INTERNAL SEED DISCOVERY (hidden in UI)
+========================================================= */
+function createSourceState(){
+  return { latestValue:"", lastChosenValue:"", previousValues:[], blacklist:[] };
+}
+function createTokenMeta(){
+  return {
+    sources: { puter:createSourceState() },
+    effectiveValue: "",
+    fetchedAt: 0,
+    lastSourceUsed: "",
+    lastReason: ""
+  };
+}
+function getTokenMeta(tokenName){
+  if (!GITHUB_FETCH.byToken[tokenName]) GITHUB_FETCH.byToken[tokenName] = createTokenMeta();
+  return GITHUB_FETCH.byToken[tokenName];
+}
+function pushUniqueFront(arr, value, max=3){
+  if (!value) return arr || [];
+  const next = [value, ...(arr || []).filter(v => v !== value)];
+  return next.slice(0, max);
+}
+function markSourceSeen(tokenName, value){
+  const st = getTokenMeta(tokenName).sources.puter;
+  st.latestValue = value;
+  st.previousValues = pushUniqueFront(st.previousValues, value, 3);
+}
+function markSourceChosen(tokenName, value){
+  const st = getTokenMeta(tokenName).sources.puter;
+  st.lastChosenValue = value;
+}
+function buildGithubUrls(owner, repo, branch, path){
+  return { blobUrl: `https://github.com/${owner}/${repo}/blob/${branch}/${path}` };
+}
+function extractUrlFromTokenText(txt){
+  const s = String(txt || "").trim();
+  if (/^https?:\/\//i.test(s)) return s;
+  try {
+    const j = JSON.parse(s);
+    if (j && typeof j === "object") {
+      if (typeof j.url === "string" && /^https?:\/\//i.test(j.url.trim())) return j.url.trim();
+      const stack = [j];
+      while (stack.length) {
+        const cur = stack.pop();
+        if (!cur) continue;
+        if (typeof cur === "string" && /^https?:\/\//i.test(cur.trim())) return cur.trim();
+        if (Array.isArray(cur)) stack.push(...cur);
+        else if (typeof cur === "object") stack.push(...Object.values(cur));
+      }
+    }
+  } catch {}
+  const m = s.match(/https?:\/\/[^\s"']+/i);
+  return m ? m[0] : "";
+}
+function validateSeedUrl(rawText){
+  const candidate = extractUrlFromTokenText(rawText);
+  const normalized = String(candidate || "").trim().replace(/^["']|["']$/g, "").replace(/\/+$/, "");
+  let u;
+  try { u = new URL(normalized); } catch { throw new Error("Invalid URL"); }
+  if (!/^https?:$/.test(u.protocol)) throw new Error("Invalid URL");
+  return normalized;
+}
+function extractGitHubBlobText(html){
+  const doc = new DOMParser().parseFromString(html, "text/html");
+  let out = "";
+  for (const s of doc.querySelectorAll("script")) {
+    const t = s.textContent || "";
+    const rawLines = t.match(/"rawLines"\s*:\s*(\[[\s\S]*?\])/);
+    if (rawLines) {
+      try {
+        const lines = JSON.parse(rawLines[1]);
+        if (Array.isArray(lines)) {
+          out = lines.join("\n").trim();
+          if (out) return out;
+        }
+      } catch {}
+    }
+  }
+  const el =
+    doc.querySelector('[data-testid="read-only-cursor-text-area"]') ||
+    doc.querySelector('.react-blob-textarea') ||
+    doc.querySelector('.blob-code-inner') ||
+    doc.querySelector('.blob-code');
+  if (el) out = (el.value || el.textContent || "").trim();
+  return out || "";
+}
+async function fetchGithubFilePuter(blobUrl){
+  if (!window.puter?.net?.fetch) throw new Error("No network");
+  const res = await puter.net.fetch(noCacheUrl(blobUrl), {
+    headers: {
+      "User-Agent":"Mozilla/5.0",
+      "Accept":"text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+      "Cache-Control":"no-cache"
+    }
+  });
+  if (!res.ok) throw new Error("No result");
+  const html = await res.text();
+  const txt = extractGitHubBlobText(html).trim();
+  if (!txt) throw new Error("No result");
+  return txt;
+}
+async function fetchTokenUrlPuterOnly(owner, repo, branch, tokenName){
+  const urls = buildGithubUrls(owner, repo, branch, tokenName);
+  const rawText = await fetchGithubFilePuter(urls.blobUrl);
+  const url = validateSeedUrl(rawText);
+
+  markSourceSeen(tokenName, url);
+  const meta = getTokenMeta(tokenName);
+  const prevEffective = meta.effectiveValue || "";
+  meta.effectiveValue = url;
+  meta.fetchedAt = Date.now();
+  meta.lastSourceUsed = "puter";
+  meta.lastReason = "puter_only";
+  markSourceChosen(tokenName, url);
+
+  return {
+    tokenName,
+    url,
+    sourceUsed: "puter",
+    changed: !!prevEffective && prevEffective !== url,
+    previousValue: prevEffective || null
+  };
+}
+async function helloSeed(url){
+  const base = String(url || "").replace(/\/+$/,"");
+  const t0 = performance.now();
+  const j = await fetchJson(noCacheUrl(base + "/api/node/hello"));
+  const latency = Math.round(performance.now() - t0);
+  return {
+    url: base,
+    latency_ms: latency,
+    node_id: j?.node?.node_id || null,
+    peers_online: j?.node?.peers_online ?? null,
+    raw: j
+  };
+}
+async function scanSeedsOnce(){
+  const { owner, repo, branch } = REPO_CFG;
+  const found = [];
+  let missStreak = 0;
+
+  for (let i = 1; i <= TOKEN_SCAN_MAX; i++) {
+    const tokenName = `token${i}`;
+    try {
+      const tok = await fetchTokenUrlPuterOnly(owner, repo, branch, tokenName);
+      const hello = await helloSeed(tok.url);
+      found.push({
+        token_name: tokenName,
+        token_index: i,
+        ...hello
+      });
+      missStreak = 0;
+    } catch {
+      missStreak++;
+      if (missStreak >= TOKEN_SCAN_STOP_AFTER_CONSECUTIVE_MISSES) break;
+    }
+  }
+  return found;
+}
+async function startSeedScanLoop(){
+  if (STATE.tokenScan.running) return;
+  STATE.tokenScan.running = true;
+
+  (async () => {
+    while (STATE.tokenScan.running) {
+      try {
+        const results = await scanSeedsOnce();
+        const dedup = new Map();
+        for (const n of results.sort((a,b)=>a.latency_ms-b.latency_ms)) {
+          const key = (n.node_id || "") ? `id:${n.node_id}` : `url:${n.url}`;
+          if (!dedup.has(key)) dedup.set(key, n);
+        }
+        const unique = Array.from(dedup.values()).sort((a,b)=>a.latency_ms-b.latency_ms);
+        STATE.seeds = unique;
+        STATE.connectedSeeds = unique.slice(0, MAX_CONNECTED_SEEDS);
+
+        updateMiniStats();
+        if (STATE.connectedSeeds.length) {
+          setStatus("netStatus", `Connected to ${STATE.connectedSeeds.length} seed(s)`, "ok");
+        } else {
+          setStatus("netStatus", `Disconnected`, "warn");
+        }
+
+        if (STATE.online) {
+          startAllPollLoops();
+          await sendHeartbeatAll();
+        }
+      } catch {
+        setStatus("netStatus", "Disconnected", "err");
+      }
+
+      await sleep(TOKEN_SCAN_BACKOFF_MS);
+    }
+  })();
+}
+function stopSeedScanLoop(){ STATE.tokenScan.running = false; }
+
+async function discoverSeeds(){
+  const results = await scanSeedsOnce();
+  const dedup = new Map();
+  for (const n of results.sort((a,b)=>a.latency_ms-b.latency_ms)) {
+    const key = (n.node_id || "") ? `id:${n.node_id}` : `url:${n.url}`;
+    if (!dedup.has(key)) dedup.set(key, n);
+  }
+  const unique = Array.from(dedup.values()).sort((a,b)=>a.latency_ms-b.latency_ms);
+  STATE.seeds = unique;
+  STATE.connectedSeeds = unique.slice(0, MAX_CONNECTED_SEEDS);
+
+  updateMiniStats();
+  if (STATE.connectedSeeds.length) setStatus("netStatus", `Connected to ${STATE.connectedSeeds.length} seed(s)`, "ok");
+  else setStatus("netStatus", "Disconnected", "warn");
+}
+
+/* =========================================================
+   NETWORK / HEARTBEAT
+========================================================= */
+async function postToSeed(seedUrl, path, body){
+  return await fetchJson(noCacheUrl(seedUrl.replace(/\/+$/,"") + path), {
+    method:"POST",
+    headers:{ "Content-Type":"application/json" },
+    body: JSON.stringify(body)
+  });
+}
+async function getFromSeed(seedUrl, path){
+  return await fetchJson(noCacheUrl(seedUrl.replace(/\/+$/,"") + path));
+}
+
+async function sendHeartbeatToSeed(seed){
+  return await postToSeed(seed.url, "/api/peer/heartbeat", {
+    peer_id: STATE.peerId,
+    display_name: STATE.identity || STATE.peerId,
+    signaling_url: "",
+    capabilities: {
+      webrtc: true,
+      audio: true,
+      video: true,
+      chat: true,
+      file_transfer: true,
+      datachannel: true
+    }
+  });
+}
+
+async function sendHeartbeatAll(){
+  if (!STATE.online || !STATE.connectedSeeds.length) return;
+
+  const nextConnected = [];
+  const merged = new Map();
+
+  await Promise.all(STATE.connectedSeeds.map(async (seed) => {
+    try {
+      const j = await sendHeartbeatToSeed(seed);
+      nextConnected.push(seed);
+
+      const peers = Array.isArray(j?.peers) ? j.peers : [];
+      for (const p of peers) {
+        if (!p || p.peer_id === STATE.peerId) continue;
+
+        const existing = merged.get(p.peer_id);
+        if (!existing) {
+          merged.set(p.peer_id, {
+            peer_id: p.peer_id,
+            display_name: p.display_name || p.peer_id,
+            online: p.online !== false,
+            seed_urls: [seed.url],
+            seeds_count: 1,
+            last_seen: Date.now()
+          });
+        } else {
+          existing.seed_urls = Array.from(new Set([...(existing.seed_urls || []), seed.url]));
+          existing.seeds_count = existing.seed_urls.length;
+          if (!existing.display_name && p.display_name) existing.display_name = p.display_name;
+          existing.online = existing.online || (p.online !== false);
+          existing.last_seen = Date.now();
+        }
+      }
+    } catch {}
+  }));
+
+  if (!nextConnected.length) {
+    setStatus("netStatus", "Disconnected", "err");
+    return;
+  }
+
+  STATE.connectedSeeds = nextConnected;
+  STATE.peersById = merged;
+  updateMiniStats();
+  renderPeers();
+
+  const loopUrls = new Set([...STATE.seedPollLoops.keys()]);
+  const seedUrls = new Set(STATE.connectedSeeds.map(n => n.url));
+  const loopsMismatch = loopUrls.size !== seedUrls.size || [...loopUrls].some(u => !seedUrls.has(u));
+  if (loopsMismatch && STATE.online) startAllPollLoops();
+}
+
+async function startHeartbeatLoop(){
+  if (STATE.heartbeatTimer) clearInterval(STATE.heartbeatTimer);
+  await sendHeartbeatAll();
+  STATE.heartbeatTimer = setInterval(sendHeartbeatAll, HEARTBEAT_MS);
+}
+function stopHeartbeatLoop(){
+  if (STATE.heartbeatTimer) clearInterval(STATE.heartbeatTimer);
+  STATE.heartbeatTimer = null;
+}
+
+async function autoLogin(force=false){
+  try {
+    ensureIdentity();
+    if (!STATE.connectedSeeds.length || force) {
+      await discoverSeeds();
+    }
+
+    STATE.online = true;
+    saveStoredIdentity();
+    await startHeartbeatLoop();
+    startAllPollLoops();
+
+    setStatus("idStatus", `Online as ${STATE.identity}`, "ok");
+    if (STATE.connectedSeeds.length) setStatus("netStatus", `Connected to ${STATE.connectedSeeds.length} seed(s)`, "ok");
+    else setStatus("netStatus", "Disconnected", "warn");
+
+    updateHeaderPills();
+    addSystemMessage(`You are online as ${STATE.peerId}(${STATE.identity})`);
+  } catch {
+    STATE.online = false;
+    setStatus("idStatus", "Offline", "err");
+  }
+}
+
+async function logoutAll(){
+  STATE.online = false;
+  stopHeartbeatLoop();
+  stopAllPollLoops();
+
+  STATE.peersById = new Map();
+  STATE.selectedPeer = "";
+  renderPeers();
+  updateMiniStats();
+
+  await stopPc(true);
+
+  setStatus("idStatus", "Offline", "warn");
+  setStatus("netStatus", STATE.connectedSeeds.length ? `Connected to ${STATE.connectedSeeds.length} seed(s)` : "Disconnected", STATE.connectedSeeds.length ? "ok" : "warn");
+  addSystemMessage("You are offline");
+}
+
+/* =========================================================
+   PEERS UI
+========================================================= */
+function renderPeers(){
+  const q = ($("peerSearch").value || "").trim().toLowerCase();
+  const arr = Array.from(STATE.peersById.values())
+    .filter(p => {
+      if (!q) return true;
+      return (p.peer_id || "").toLowerCase().includes(q) || (p.display_name || "").toLowerCase().includes(q);
+    })
+    .sort((a,b) => (a.display_name || a.peer_id).localeCompare(b.display_name || b.peer_id));
+
+  const el = $("peerList");
+  if (!arr.length){
+    el.innerHTML = `<div class="muted">No peers found.</div>`;
+    updateHeaderPills();
+    return;
+  }
+
+  el.innerHTML = "";
+  for (const p of arr) {
+    const d = document.createElement("div");
+    d.className = "peer" + (STATE.selectedPeer === p.peer_id ? " active" : "");
+    d.onclick = () => {
+      STATE.selectedPeer = p.peer_id;
+      renderPeers();
+      updateHeaderPills();
+      addSystemMessage(`Selected peer ${p.peer_id}(${p.display_name || p.peer_id})`);
+    };
+    d.innerHTML = `
+      <div style="min-width:0">
+        <div class="name">${escapeHtml(p.peer_id)} <span style="color:#94a3b8;font-weight:500">(${escapeHtml(p.display_name || p.peer_id)})</span></div>
+        <div class="sub">${p.seeds_count || 1} seed(s)</div>
+      </div>
+      <span class="badge">${p.online ? "online" : "offline"}</span>
+    `;
+    el.appendChild(d);
+  }
+
+  updateHeaderPills();
+}
+
+async function refreshPeersNow(){
+  try { await sendHeartbeatAll(); }
+  catch { setStatus("netStatus", "Disconnected", "err"); }
+}
+
+/* =========================================================
+   POLLING / SIGNALING
+========================================================= */
+function startAllPollLoops(){
+  stopAllPollLoops();
+  for (const seed of STATE.connectedSeeds) startSeedPollLoop(seed.url);
+}
+function stopAllPollLoops(){
+  for (const [url, ctrl] of STATE.seedPollLoops.entries()) ctrl.running = false;
+  STATE.seedPollLoops.clear();
+}
+function startSeedPollLoop(seedUrl){
+  if (STATE.seedPollLoops.has(seedUrl)) return;
+  const ctrl = { running:true };
+  STATE.seedPollLoops.set(seedUrl, ctrl);
+
+  (async () => {
+    while (ctrl.running) {
+      if (!STATE.online) { await sleep(500); continue; }
+      try {
+        const j = await getFromSeed(seedUrl, `/api/peer/poll?peer_id=${encodeURIComponent(STATE.peerId)}&timeout=20`);
+        const events = Array.isArray(j?.events) ? j.events : [];
+        for (const ev of events) {
+          ev.__seed_url = seedUrl;
+          await handleEvent(ev);
+        }
+      } catch {
+        await sleep(700);
+      }
+    }
+  })();
+}
+
+async function signalSeedRequest(path, body, preferredSeedUrl){
+  const candidates = [];
+  if (preferredSeedUrl) {
+    const p = STATE.connectedSeeds.find(n => n.url === preferredSeedUrl);
+    if (p) candidates.push(p);
+  }
+  for (const n of STATE.connectedSeeds) {
+    if (!candidates.find(x => x.url === n.url)) candidates.push(n);
+  }
+
+  let lastErr = null;
+  for (const n of candidates) {
+    try {
+      const data = await postToSeed(n.url, path, body);
+      return { seedUrl:n.url, data };
+    } catch (e) { lastErr = e; }
+  }
+  throw lastErr || new Error("No connection");
+}
+
+/* =========================================================
+   CALL / CONNECT ACTIONS
+========================================================= */
+async function connectSelectedData(){
+  await dialPeer("data");
+}
+async function dialSelectedMedia(){
+  await dialPeer("media");
+}
+
+async function dialPeer(mode){
+  try {
+    if (!STATE.online) throw new Error("offline");
+    if (!STATE.selectedPeer) throw new Error("select");
+    if (STATE.selectedPeer === STATE.peerId) throw new Error("self");
+    if (STATE.activeCallId) throw new Error("busy");
+    if (!STATE.connectedSeeds.length) throw new Error("no seeds");
+
+    if (mode === "media") await ensureMedia();
+
+    STATE.outgoingRequestedMode = mode;
+
+    const r = await signalSeedRequest("/api/peer/invite", {
+      caller: STATE.peerId,
+      callee: STATE.selectedPeer,
+      session_kind: mode // harmless if server ignores
+    });
+
+    STATE.activeSeedUrl = r.seedUrl;
+    STATE.activeCallId = r.data?.call_id || r.data?.call?.id || "";
+    STATE.activePeer = STATE.selectedPeer;
+    STATE.sessionMode = "connecting";
+    updateHeaderPills();
+
+    setStatus("idStatus", mode === "media" ? "Calling…" : "Connecting…", "ok");
+    addSystemMessage(`${mode === "media" ? "Calling" : "Connecting to"} ${STATE.selectedPeer}`);
+  } catch {
+    setStatus("idStatus", "Could not connect", "err");
+  }
+}
+
+async function acceptIncoming(mode="data"){
+  try {
+    if (!STATE.incomingCall) throw new Error("none");
+    if (mode === "media") await ensureMedia();
+
+    const ev = STATE.incomingCall;
+    const seedUrl = ev.__seed_url || STATE.connectedSeeds[0]?.url;
+
+    await postToSeed(seedUrl, "/api/peer/respond", {
+      peer_id: STATE.peerId,
+      call_id: ev.call_id,
+      action: "accept"
+    });
+
+    STATE.activeCallId = ev.call_id;
+    STATE.activePeer = ev.from;
+    STATE.activeSeedUrl = seedUrl;
+    STATE.sessionMode = mode;
+    updateHeaderPills();
+
+    await createPc(true, ev.call_id, ev.from, mode);
+    STATE.incomingCall = null;
+    renderIncomingBar();
+
+    setStatus("idStatus", mode === "media" ? "Call accepted" : "Chat connected", "ok");
+    addSystemMessage(`${mode === "media" ? "Call" : "Chat"} accepted with ${ev.from}`);
+  } catch {
+    setStatus("idStatus", "Could not accept", "err");
+  }
+}
+
+async function rejectIncoming(){
+  try {
+    if (!STATE.incomingCall) throw new Error("none");
+    const ev = STATE.incomingCall;
+    const seedUrl = ev.__seed_url || STATE.connectedSeeds[0]?.url;
+
+    await postToSeed(seedUrl, "/api/peer/respond", {
+      peer_id: STATE.peerId,
+      call_id: ev.call_id,
+      action: "reject"
+    });
+
+    addSystemMessage(`Rejected request from ${ev.from}`);
+    STATE.incomingCall = null;
+    renderIncomingBar();
+    setStatus("idStatus", "Request rejected", "warn");
+  } catch {
+    setStatus("idStatus", "Could not reject", "err");
+  }
+}
+
+async function hangup(){
+  try {
+    if (!STATE.activeCallId && !STATE.pc) {
+      setStatus("idStatus", "No active session", "warn");
+      return;
+    }
+
+    try {
+      if (STATE.activeCallId) {
+        await signalSeedRequest("/api/peer/hangup", {
+          peer_id: STATE.peerId,
+          call_id: STATE.activeCallId,
+          reason: "user_hangup"
+        }, STATE.activeSeedUrl);
+      }
+    } catch {}
+
+    await stopPc(true);
+    await restartSessionAfterCallEnd();
+    setStatus("idStatus", "Disconnected", "warn");
+    addSystemMessage("Session ended");
+  } catch {
+    setStatus("idStatus", "Could not disconnect", "err");
+  }
+}
+
+function renderIncomingBar(){
+  const bar = $("incomingBar");
+  if (!STATE.incomingCall){
+    bar.classList.remove("show");
+    return;
+  }
+  const from = STATE.incomingCall.from;
+  $("incomingText").textContent = `Incoming request from ${from}`;
+  bar.classList.add("show");
+}
+
+async function sendSignal(callId, signalType, payload){
+  await signalSeedRequest("/api/peer/signal", {
+    peer_id: STATE.peerId,
+    call_id: callId,
+    signal_type: signalType,
+    payload
+  }, STATE.activeSeedUrl);
+}
+
+async function handleEvent(ev){
+  const t = ev.type;
+
+  if (t === "incoming_call") {
+    STATE.incomingCall = ev;
+    renderIncomingBar();
+    setStatus("idStatus", "Incoming request", "warn");
+    addSystemMessage(`Incoming request from ${ev.from}`);
+    return;
+  }
+
+  if (t === "call_outgoing") {
+    STATE.activeCallId = ev.call_id;
+    STATE.activePeer = ev.to;
+    STATE.activeSeedUrl = ev.__seed_url || STATE.activeSeedUrl;
+    STATE.sessionMode = "connecting";
+    updateHeaderPills();
+    return;
+  }
+
+  if (t === "call_response") {
+    if (ev.action === "accept") {
+      STATE.activeSeedUrl = ev.__seed_url || STATE.activeSeedUrl;
+      const mode = STATE.outgoingRequestedMode || "data";
+      STATE.sessionMode = mode;
+      updateHeaderPills();
+      setStatus("idStatus", mode === "media" ? "Connecting call…" : "Connecting chat…", "ok");
+
+      if (!STATE.pc) await createPc(false, ev.call_id, ev.from, mode);
+      const pc = STATE.pc;
+
+      STATE.makingOffer = true;
+      try {
+        const offer = await pc.createOffer({
+          offerToReceiveAudio: mode === "media",
+          offerToReceiveVideo: mode === "media"
+        });
+        await pc.setLocalDescription(offer);
+        await sendSignal(ev.call_id, "offer", pc.localDescription);
+      } finally {
+        STATE.makingOffer = false;
+      }
+      return;
+    }
+
+    if (ev.action === "reject") {
+      setStatus("idStatus", "Rejected", "warn");
+      addSystemMessage("Peer rejected the request");
+      await stopPc(true);
+      await restartSessionAfterCallEnd();
+      return;
+    }
+  }
+
+  if (t === "call_response_local") {
+    if (ev.action === "reject" || ev.action === "accept") {
+      STATE.incomingCall = null;
+      renderIncomingBar();
+    }
+    if (ev.action === "reject") {
+      await stopPc(true);
+      await restartSessionAfterCallEnd();
+    }
+    return;
+  }
+
+  if (t === "signal") {
+    await handleSignal(ev);
+    return;
+  }
+
+  if (t === "hangup" || t === "hangup_local") {
+    setStatus("idStatus", "Disconnected", "warn");
+    addSystemMessage("Session ended");
+    await stopPc(true);
+    await restartSessionAfterCallEnd();
+  }
+}
+
+/* =========================================================
+   MEDIA / WEBRTC / DATA CHANNELS
+========================================================= */
+async function enableMedia(){
+  try {
+    await ensureMedia();
+    setStatus("idStatus", "Camera ready", "ok");
+  } catch {
+    setStatus("idStatus", "Camera unavailable", "err");
+  }
+}
+
+async function ensureMedia(){
+  if (STATE.localStream) {
+    updateVideoHints();
+    return STATE.localStream;
+  }
+  if (!navigator.mediaDevices?.getUserMedia) throw new Error("unsupported");
+
+  const stream = await navigator.mediaDevices.getUserMedia({
+    audio: { echoCancellation:true, noiseSuppression:true, autoGainControl:true },
+    video: { width:{ideal:720}, height:{ideal:720}, facingMode:"user" }
+  });
+
+  STATE.localStream = stream;
+  $("localVideo").srcObject = stream;
+  await safePlay($("localVideo"));
+  updateVideoHints();
+  return stream;
+}
+
+async function createPc(polite, callId, peerId, mode="data"){
+  if (STATE.pc) return STATE.pc;
+
+  STATE.polite = !!polite;
+  STATE.pendingIce = [];
+  STATE.fileRecv = {};
+  STATE.sessionMode = mode;
+  updateHeaderPills();
+
+  const pc = new RTCPeerConnection(RTC_CONFIG);
+  STATE.pc = pc;
+
+  STATE.remoteStream = new MediaStream();
+  $("remoteVideo").srcObject = STATE.remoteStream;
+  updateVideoHints();
+
+  if (mode === "media") {
+    await ensureMedia();
+    for (const tr of (STATE.localStream?.getTracks() || [])) pc.addTrack(tr, STATE.localStream);
+  }
+
+  if (!polite) {
+    STATE.chatDc = pc.createDataChannel("chat", { ordered:true });
+    wireChatChannel(STATE.chatDc);
+
+    STATE.fileDc = pc.createDataChannel("file", { ordered:true });
+    wireFileChannel(STATE.fileDc);
+  }
+
+  pc.ondatachannel = (e) => {
+    if (e.channel.label === "chat") {
+      STATE.chatDc = e.channel;
+      wireChatChannel(STATE.chatDc);
+    } else if (e.channel.label === "file") {
+      STATE.fileDc = e.channel;
+      wireFileChannel(STATE.fileDc);
+    }
+  };
+
+  pc.ontrack = async (e) => {
+    if (e.streams && e.streams[0]) {
+      $("remoteVideo").srcObject = e.streams[0];
+    } else if (STATE.remoteStream) {
+      STATE.remoteStream.addTrack(e.track);
+      $("remoteVideo").srcObject = STATE.remoteStream;
+    }
+    updateVideoHints();
+    await safePlay($("remoteVideo"));
+  };
+
+  pc.onicecandidate = async (e) => {
+    if (!e.candidate || !STATE.activeCallId) return;
+    try { await sendSignal(STATE.activeCallId, "ice", e.candidate); } catch {}
+  };
+
+  pc.onconnectionstatechange = async () => {
+    if (pc.connectionState === "connected") {
+      STATE.sessionMode = mode;
+      updateHeaderPills();
+      setStatus("idStatus", mode === "media" ? "In call" : "Connected", "ok");
+      addSystemMessage(mode === "media" ? "Call connected" : "Chat connected");
+      updateVideoHints();
+      await safePlay($("remoteVideo"));
+    }
+
+    if (["failed","disconnected","closed"].includes(pc.connectionState)) {
+      setTimeout(async () => {
+        if (STATE.pc === pc && pc.connectionState !== "connected") {
+          await stopPc(true);
+          await restartSessionAfterCallEnd();
+          setStatus("idStatus", "Disconnected", "warn");
+          addSystemMessage("Connection lost");
+        }
+      }, 1200);
+    }
+  };
+
+  pc.oniceconnectionstatechange = () => {};
+  return pc;
+}
+
+function wireChatChannel(dc){
+  dc.onopen = () => {
+    addSystemMessage("Chat channel ready");
+  };
+  dc.onclose = () => {
+    addSystemMessage("Chat channel closed");
+  };
+  dc.onerror = () => {};
+
+  dc.onmessage = (e) => {
+    try {
+      const j = JSON.parse(e.data);
+      if (j?.type === "chat") {
+        const peer = STATE.peersById.get(STATE.activePeer) || { peer_id: STATE.activePeer, display_name: STATE.activePeer };
+        addChatEntry({
+          id: `m-${Date.now()}-${Math.random().toString(36).slice(2,8)}`,
+          kind: "chat",
+          role: "peer",
+          peer,
+          who: `${peer.peer_id}(${peer.display_name || peer.peer_id})`,
+          text: j.text || "",
+          ts: Number(j.ts) || Date.now()
+        });
+      }
+    } catch {}
+  };
+}
+
+function wireFileChannel(dc){
+  dc.binaryType = "arraybuffer";
+  dc.onopen = () => addSystemMessage("File sharing ready");
+  dc.onclose = () => {};
+  dc.onerror = () => {};
+
+  dc.onmessage = async (e) => {
+    if (typeof e.data === "string") {
+      let j;
+      try { j = JSON.parse(e.data); } catch { return; }
+
+      if (j.type === "file-meta") {
+        const msgId = `f-${Date.now()}-${Math.random().toString(36).slice(2,8)}`;
+        STATE.fileRecv[j.transfer_id] = {
+          meta: j,
+          chunks: [],
+          bytesReceived: 0,
+          msgId
+        };
+
+        const peer = STATE.peersById.get(STATE.activePeer) || { peer_id: STATE.activePeer, display_name: STATE.activePeer };
+        addChatEntry({
+          id: msgId,
+          kind: "file",
+          role: "peer",
+          peer,
+          who: `${peer.peer_id}(${peer.display_name || peer.peer_id})`,
+          ts: Date.now(),
+          file: {
+            name: j.name,
+            size: j.size,
+            mime: j.mime || "application/octet-stream",
+            state: "receiving…",
+            kept: true,
+            blob: null,
+            blobUrl: null
+          }
+        });
+        return;
+      }
+
+      if (j.type === "file-end") {
+        const rec = STATE.fileRecv[j.transfer_id];
+        if (!rec) return;
+        const blob = new Blob(rec.chunks, { type: rec.meta.mime || "application/octet-stream" });
+
+        const item = findChatEntryById(rec.msgId);
+        if (item?.file) {
+          item.file.blob = blob;
+          item.file.state = "received";
+        }
+        delete STATE.fileRecv[j.transfer_id];
+        renderChatHistory();
+        return;
+      }
+
+      return;
+    }
+
+    // binary chunk
+    const activeTransfers = Object.values(STATE.fileRecv);
+    if (!activeTransfers.length) return;
+    const rec = activeTransfers[activeTransfers.length - 1];
+
+    rec.chunks.push(e.data);
+    rec.bytesReceived += (e.data.byteLength || 0);
+
+    const item = findChatEntryById(rec.msgId);
+    if (item?.file && rec.meta?.size) {
+      const pct = Math.min(100, Math.floor((rec.bytesReceived / rec.meta.size) * 100));
+      item.file.state = `receiving… ${pct}%`;
+      if (pct === 100) item.file.state = "processing…";
+      renderChatHistory();
+    }
+  };
+}
+
+function sendChat(){
+  const txt = ($("chatText").value || "").trim();
+  if (!txt) return;
+
+  if (!STATE.chatDc || STATE.chatDc.readyState !== "open") {
+    setStatus("idStatus", "Connect first", "warn");
+    return;
+  }
+
+  try {
+    const payload = { type:"chat", text:txt, ts:Date.now() };
+    STATE.chatDc.send(JSON.stringify(payload));
+
+    addChatEntry({
+      id: `m-${Date.now()}-${Math.random().toString(36).slice(2,8)}`,
+      kind: "chat",
+      role: "me",
+      who: `${STATE.peerId}(${STATE.identity || STATE.peerId})`,
+      text: txt,
+      ts: payload.ts
+    });
+
+    $("chatText").value = "";
+  } catch {
+    setStatus("idStatus", "Could not send message", "err");
+  }
+}
+
+async function sendSelectedFile(){
+  try {
+    const f = $("fileInput").files?.[0];
+    if (!f) throw new Error("Select a file");
+    if (!STATE.fileDc || STATE.fileDc.readyState !== "open") throw new Error("Not connected");
+    if (STATE.fileSendBusy) throw new Error("Busy");
+
+    STATE.fileSendBusy = true;
+    const transferId = `${Date.now()}-${Math.random().toString(36).slice(2,8)}`;
+    const msgId = `f-${Date.now()}-${Math.random().toString(36).slice(2,8)}`;
+    const CHUNK = 16 * 1024;
+
+    addChatEntry({
+      id: msgId,
+      kind: "file",
+      role: "me",
+      who: `${STATE.peerId}(${STATE.identity || STATE.peerId})`,
+      ts: Date.now(),
+      file: {
+        name: f.name,
+        size: f.size,
+        mime: f.type || "application/octet-stream",
+        state: "sending… 0%",
+        kept: true,
+        blob: f,
+        blobUrl: null
+      }
+    });
+
+    STATE.fileDc.send(JSON.stringify({
+      type: "file-meta",
+      transfer_id: transferId,
+      name: f.name,
+      size: f.size,
+      mime: f.type || "application/octet-stream",
+      chunk_size: CHUNK
+    }));
+
+    let offset = 0;
+    while (offset < f.size) {
+      while (STATE.fileDc.bufferedAmount > 2 * 1024 * 1024) await sleep(50);
+      const chunk = await f.slice(offset, offset + CHUNK).arrayBuffer();
+      STATE.fileDc.send(chunk);
+      offset += chunk.byteLength;
+
+      const pct = Math.min(100, Math.floor((offset / f.size) * 100));
+      const item = findChatEntryById(msgId);
+      if (item?.file) {
+        item.file.state = `sending… ${pct}%`;
+        renderChatHistory();
+      }
+    }
+
+    STATE.fileDc.send(JSON.stringify({ type:"file-end", transfer_id: transferId }));
+
+    const item = findChatEntryById(msgId);
+    if (item?.file) {
+      item.file.state = "sent";
+      renderChatHistory();
+    }
+
+    $("fileInput").value = "";
+  } catch {
+    setStatus("idStatus", "Could not send file", "err");
+  } finally {
+    STATE.fileSendBusy = false;
+  }
+}
+
+async function handleSignal(ev){
+  const { call_id, signal_type, payload, from } = ev;
+
+  if (!STATE.pc) {
+    const activeMatch = STATE.activeCallId && STATE.activeCallId === call_id;
+    if (!activeMatch) return;
+    // If we don't know, assume data session until tracks appear
+    await createPc(false, call_id, from, STATE.sessionMode === "connecting" ? (STATE.outgoingRequestedMode || "data") : (STATE.sessionMode || "data"));
+  }
+
+  const pc = STATE.pc;
+  if (!pc) return;
+
+  if (signal_type === "offer") {
+    const offerCollision = STATE.makingOffer || pc.signalingState !== "stable";
+    const ignoreOffer = !STATE.polite && offerCollision;
+    if (ignoreOffer) return;
+
+    await pc.setRemoteDescription(new RTCSessionDescription(payload));
+    await flushPendingIce();
+
+    const answer = await pc.createAnswer();
+    await pc.setLocalDescription(answer);
+    await sendSignal(call_id, "answer", pc.localDescription);
+    return;
+  }
+
+  if (signal_type === "answer") {
+    await pc.setRemoteDescription(new RTCSessionDescription(payload));
+    await flushPendingIce();
+    return;
+  }
+
+  if (signal_type === "ice") {
+    if (!pc.remoteDescription) {
+      STATE.pendingIce.push(payload);
+    } else {
+      try { await pc.addIceCandidate(new RTCIceCandidate(payload)); } catch {}
+    }
+  }
+}
+
+async function flushPendingIce(){
+  if (!STATE.pc || !STATE.pc.remoteDescription) return;
+  const arr = [...STATE.pendingIce];
+  STATE.pendingIce = [];
+  for (const c of arr) {
+    try { await STATE.pc.addIceCandidate(new RTCIceCandidate(c)); } catch {}
+  }
+}
+
+async function stopPc(resetCallState=true){
+  try {
+    if (STATE.pc) {
+      try { STATE.pc.ontrack = null; } catch {}
+      try { STATE.pc.ondatachannel = null; } catch {}
+      try { STATE.pc.onicecandidate = null; } catch {}
+      try { STATE.pc.close(); } catch {}
+    }
+  } catch {}
+
+  STATE.pc = null;
+  STATE.chatDc = null;
+  STATE.fileDc = null;
+  STATE.pendingIce = [];
+  STATE.fileRecv = {};
+  STATE.fileSendBusy = false;
+  STATE.makingOffer = false;
+  STATE.polite = false;
+
+  if (STATE.remoteStream) {
+    try { STATE.remoteStream.getTracks().forEach(t => t.stop()); } catch {}
+  }
+  STATE.remoteStream = null;
+  $("remoteVideo").srcObject = null;
+
+  if (resetCallState) {
+    STATE.activeCallId = "";
+    STATE.activePeer = "";
+    STATE.activeSeedUrl = "";
+    STATE.incomingCall = null;
+    STATE.sessionMode = "idle";
+  }
+
+  renderIncomingBar();
+  updateHeaderPills();
+  updateVideoHints();
+}
+
+/* =========================================================
+   SESSION RESTART AFTER END
+========================================================= */
+async function restartSessionAfterCallEnd(){
+  if (!STATE.online) return;
+  try {
+    STATE.online = false;
+    stopHeartbeatLoop();
+    stopAllPollLoops();
+    await sleep(250);
+    STATE.online = true;
+    await startHeartbeatLoop();
+    startAllPollLoops();
+    setStatus("idStatus", `Online as ${STATE.identity}`, "ok");
+  } catch {
+    setStatus("idStatus", "Disconnected", "err");
+  }
+}
+
+/* =========================================================
+   BOOT
+========================================================= */
+async function boot(){
+  const continueBoot = await clearCachesOnceAndReload();
+  if (!continueBoot) return;
+
+  ensureIdentity();
+  updateHeaderPills();
+  renderChatHistory();
+  updateVideoHints();
+
+  if (!window.isSecureContext) {
+    setStatus("idStatus", "Use HTTPS for camera", "warn");
+  }
+
+  startSeedScanLoop();
+
+  try { await discoverSeeds(); } catch {}
+
+  await autoLogin(false);
+
+  if (STATE.networkTickTimer) clearInterval(STATE.networkTickTimer);
+  STATE.networkTickTimer = setInterval(async () => {
+    try {
+      const before = new Set(STATE.connectedSeeds.map(n => n.url));
+      await discoverSeeds();
+      const after = new Set(STATE.connectedSeeds.map(n => n.url));
+      const changed = before.size !== after.size || [...before].some(u => !after.has(u));
+      if (changed && STATE.online) {
+        startAllPollLoops();
+        await sendHeartbeatAll();
+      }
+    } catch {}
+  }, NETWORK_REFRESH_MS);
+
+  $("chatText").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") sendChat();
+  });
+
+  document.addEventListener("fullscreenchange", () => {});
+}
+
+window.addEventListener("beforeunload", () => {
+  stopHeartbeatLoop();
+  stopAllPollLoops();
+  stopSeedScanLoop();
+});
+
+boot();
+</script>
+</body>
+</html>
