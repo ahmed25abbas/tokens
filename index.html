@@ -620,20 +620,14 @@
 const STARTUP_RELOAD_FLAG = "__p2p_peer_client_reloaded_once__";
 const HEARTBEAT_MS = 5000;
 const NETWORK_REFRESH_MS = 15000;
-const MAX_CONNECTED_SEEDS = 8;
+const MAX_CONNECTED_SEEDS = 8; // cluster-aware: allow more workers/seeds
 
-// Parallel / lazy token scanning
-const TOKEN_SCAN_CONCURRENCY = 5;              // pool size
-const TOKEN_PROMOTE_BATCH_SIZE = 5;            // connect/update after each 5 successes
-const TOKEN_SCAN_EMPTY_PAUSE_MS = 400;         // brief pause when nothing found
-const TOKEN_FETCH_TIMEOUT_MS = 7000;
-const SEED_HELLO_TIMEOUT_MS = 2500;
+// Internal token/seed discovery (hidden from UI)
+const TOKEN_SCAN_MAX = 999;
+const TOKEN_SCAN_STOP_AFTER_CONSECUTIVE_MISSES = 10;
+const TOKEN_SCAN_BACKOFF_MS = 10000;
 
-// cache token *indexes* only (NOT URLs)
-const LIVE_TOKEN_CACHE_KEY = "p2p_live_token_indexes_v1";
-const LIVE_TOKEN_CACHE_MAX = 200;
-
-// Internal repo
+// Internal repo (hidden from UI)
 const REPO_CFG = {
   owner: "ahmed25abbas",
   repo: "tokens",
@@ -647,10 +641,11 @@ const STATE = {
   connectedSeeds: [],
   seedPollLoops: new Map(),
 
+  // NEW: cluster discovery cache (learned from /api/peer/heartbeat known_nodes)
   discoveredNodeUrls: new Set(),
 
-  peerId: "",
-  identity: "",
+  peerId: "",          // hidden numeric id for protocol
+  identity: "",        // user-editable single visible identity (name)
   online: false,
   peersById: new Map(),
   selectedPeer: "",
@@ -659,7 +654,7 @@ const STATE = {
   activeCallId: "",
   activePeer: "",
   activeSeedUrl: "",
-  sessionMode: "idle",
+  sessionMode: "idle", // idle | connecting | data | media
   outgoingRequestedMode: "data",
 
   heartbeatTimer: null,
@@ -676,25 +671,17 @@ const STATE = {
   polite: false,
   pendingIce: [],
 
-  fileRecv: {},
+  fileRecv: {}, // by transfer id
   fileSendBusy: false,
 
-  chatHistory: [],
+  chatHistory: [], // rendered timeline entries
 
-  // token scanner state (infinite / lazy)
   tokenScan: {
     running: false,
-    nextIndex: 1,
-    activeWorkers: 0,
-    inFlightIndexes: new Set(),
-    doneIndexes: new Set(),
-    queuePriority: [],          // cached likely-alive token indexes first
-    foundBuffer: [],            // successful hello results waiting to be promoted
-    completedSinceLastPromote: 0,
-    lastPromoteAt: 0
-  },
-
-  _seedApplyScheduled: false
+    missStreak: 0,
+    index: 1,
+    lastCycleStartedAt: 0,
+  }
 };
 
 const RTC_CONFIG = {
@@ -753,22 +740,8 @@ function noCacheUrl(url){
   return u.toString();
 }
 
-async function fetchWithTimeout(url, opts={}, timeoutMs=5000){
-  const ctrl = new AbortController();
-  const t = setTimeout(() => ctrl.abort(), timeoutMs);
-  try {
-    return await fetch(url, { cache:"no-store", redirect:"follow", ...opts, signal: ctrl.signal });
-  } finally {
-    clearTimeout(t);
-  }
-}
-
 async function fetchJson(url, opts={}){
-  const timeoutMs = Number(opts.timeoutMs || 0) || 5000;
-  const realOpts = { ...opts };
-  delete realOpts.timeoutMs;
-
-  const r = await fetchWithTimeout(url, realOpts, timeoutMs);
+  const r = await fetch(url, { cache:"no-store", redirect:"follow", ...opts });
   const ct = r.headers.get("content-type") || "";
   const body = ct.includes("application/json") ? await r.json() : await r.text();
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
@@ -812,6 +785,10 @@ function updateMiniStats(){
   $("statPeers").textContent = String(STATE.peersById.size);
   $("seedChip").textContent = `Seeds: ${STATE.connectedSeeds.length}`;
   $("peerChip").textContent = `Peers: ${STATE.peersById.size}`;
+}
+
+function simpleError(prefix, fallback){
+  return `${prefix}: ${fallback || "Something went wrong"}`;
 }
 
 /* =========================================================
@@ -935,7 +912,7 @@ function discardPendingFile(id){
 }
 
 /* =========================================================
-   STORAGE / IDENTITY
+   STORAGE / IDENTITY (single visible input)
 ========================================================= */
 function getStoredIdentity(){
   try { return JSON.parse(localStorage.getItem("p2p_identity_v2") || "{}"); }
@@ -945,7 +922,7 @@ function getStoredIdentity(){
 function saveStoredIdentity(){
   try {
     localStorage.setItem("p2p_identity_v2", JSON.stringify({
-      peerId: STATE.peerId,
+      peerId: STATE.peerId,   // hidden stable numeric id
       identity: STATE.identity
     }));
   } catch {}
@@ -995,36 +972,7 @@ async function clearCachesOnceAndReload(){
 }
 
 /* =========================================================
-   TOKEN INDEX CACHE (cache token numbers only)
-========================================================= */
-function getCachedLiveTokenIndexes(){
-  try {
-    const raw = JSON.parse(localStorage.getItem(LIVE_TOKEN_CACHE_KEY) || "[]");
-    const nums = Array.isArray(raw) ? raw : [];
-    return nums
-      .map(x => Number(x))
-      .filter(n => Number.isInteger(n) && n > 0)
-      .slice(0, LIVE_TOKEN_CACHE_MAX);
-  } catch {
-    return [];
-  }
-}
-
-function saveCachedLiveTokenIndexes(indexes){
-  try {
-    const uniq = Array.from(new Set((indexes || []).map(n => Number(n)).filter(n => Number.isInteger(n) && n > 0)));
-    localStorage.setItem(LIVE_TOKEN_CACHE_KEY, JSON.stringify(uniq.slice(0, LIVE_TOKEN_CACHE_MAX)));
-  } catch {}
-}
-
-function rememberLiveTokenIndex(i){
-  const current = getCachedLiveTokenIndexes();
-  const next = [i, ...current.filter(x => x !== i)].slice(0, LIVE_TOKEN_CACHE_MAX);
-  saveCachedLiveTokenIndexes(next);
-}
-
-/* =========================================================
-   INTERNAL SEED DISCOVERY (parallel + infinite lazy scan)
+   INTERNAL SEED DISCOVERY (hidden in UI)
 ========================================================= */
 function createSourceState(){
   return { latestValue:"", lastChosenValue:"", previousValues:[], blacklist:[] };
@@ -1056,15 +1004,9 @@ function markSourceChosen(tokenName, value){
   const st = getTokenMeta(tokenName).sources.puter;
   st.lastChosenValue = value;
 }
-
-// use RAW URL (faster than GitHub blob HTML)
 function buildGithubUrls(owner, repo, branch, path){
-  return {
-    rawUrl: `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${path}`,
-    blobUrl: `https://github.com/${owner}/${repo}/blob/${branch}/${path}`
-  };
+  return { blobUrl: `https://github.com/${owner}/${repo}/blob/${branch}/${path}` };
 }
-
 function extractUrlFromTokenText(txt){
   const s = String(txt || "").trim();
   if (/^https?:\/\//i.test(s)) return s;
@@ -1085,7 +1027,6 @@ function extractUrlFromTokenText(txt){
   const m = s.match(/https?:\/\/[^\s"']+/i);
   return m ? m[0] : "";
 }
-
 function validateSeedUrl(rawText){
   const candidate = extractUrlFromTokenText(rawText);
   const normalized = String(candidate || "").trim().replace(/^["']|["']$/g, "").replace(/\/+$/, "");
@@ -1094,32 +1035,48 @@ function validateSeedUrl(rawText){
   if (!/^https?:$/.test(u.protocol)) throw new Error("Invalid URL");
   return normalized;
 }
-
-async function fetchGithubFilePuter(rawUrl){
+function extractGitHubBlobText(html){
+  const doc = new DOMParser().parseFromString(html, "text/html");
+  let out = "";
+  for (const s of doc.querySelectorAll("script")) {
+    const t = s.textContent || "";
+    const rawLines = t.match(/"rawLines"\s*:\s*(\[[\s\S]*?\])/);
+    if (rawLines) {
+      try {
+        const lines = JSON.parse(rawLines[1]);
+        if (Array.isArray(lines)) {
+          out = lines.join("\n").trim();
+          if (out) return out;
+        }
+      } catch {}
+    }
+  }
+  const el =
+    doc.querySelector('[data-testid="read-only-cursor-text-area"]') ||
+    doc.querySelector('.react-blob-textarea') ||
+    doc.querySelector('.blob-code-inner') ||
+    doc.querySelector('.blob-code');
+  if (el) out = (el.value || el.textContent || "").trim();
+  return out || "";
+}
+async function fetchGithubFilePuter(blobUrl){
   if (!window.puter?.net?.fetch) throw new Error("No network");
-  const res = await puter.net.fetch(noCacheUrl(rawUrl), {
+  const res = await puter.net.fetch(noCacheUrl(blobUrl), {
     headers: {
       "User-Agent":"Mozilla/5.0",
-      "Accept":"text/plain,*/*",
+      "Accept":"text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
       "Cache-Control":"no-cache"
-    },
-    // puter may ignore signal; timeout is handled by race below
+    }
   });
-
-  const timeout = new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), TOKEN_FETCH_TIMEOUT_MS));
-  const actual = (async () => {
-    if (!res.ok) throw new Error("No result");
-    const txt = (await res.text()).trim();
-    if (!txt) throw new Error("No result");
-    return txt;
-  })();
-
-  return await Promise.race([actual, timeout]);
+  if (!res.ok) throw new Error("No result");
+  const html = await res.text();
+  const txt = extractGitHubBlobText(html).trim();
+  if (!txt) throw new Error("No result");
+  return txt;
 }
-
 async function fetchTokenUrlPuterOnly(owner, repo, branch, tokenName){
   const urls = buildGithubUrls(owner, repo, branch, tokenName);
-  const rawText = await fetchGithubFilePuter(urls.rawUrl);
+  const rawText = await fetchGithubFilePuter(urls.blobUrl);
   const url = validateSeedUrl(rawText);
 
   markSourceSeen(tokenName, url);
@@ -1143,9 +1100,10 @@ async function fetchTokenUrlPuterOnly(owner, repo, branch, tokenName){
 async function helloSeed(url){
   const base = String(url || "").replace(/\/+$/,"");
   const t0 = performance.now();
-  const j = await fetchJson(noCacheUrl(base + "/api/node/hello"), { timeoutMs: SEED_HELLO_TIMEOUT_MS });
+  const j = await fetchJson(noCacheUrl(base + "/api/node/hello"));
   const latency = Math.round(performance.now() - t0);
 
+  // cluster node compatibility: prefer cluster_node_id + worker_id if present
   return {
     url: base,
     latency_ms: latency,
@@ -1156,6 +1114,33 @@ async function helloSeed(url){
   };
 }
 
+async function scanSeedsOnce(){
+  const { owner, repo, branch } = REPO_CFG;
+  const found = [];
+  let missStreak = 0;
+
+  for (let i = 1; i <= TOKEN_SCAN_MAX; i++) {
+    const tokenName = `token${i}`;
+    try {
+      const tok = await fetchTokenUrlPuterOnly(owner, repo, branch, tokenName);
+      const hello = await helloSeed(tok.url);
+      found.push({
+        token_name: tokenName,
+        token_index: i,
+        ...hello
+      });
+      missStreak = 0;
+    } catch {
+      missStreak++;
+      if (missStreak >= TOKEN_SCAN_STOP_AFTER_CONSECUTIVE_MISSES) break;
+    }
+  }
+  return found;
+}
+
+/* =========================================================
+   CLUSTER DISCOVERY UPGRADE (known_nodes gossip from server)
+========================================================= */
 function addDiscoveredSeedUrl(url){
   const u = String(url || "").trim().replace(/\/+$/,"");
   if (!/^https?:\/\//i.test(u)) return;
@@ -1171,212 +1156,65 @@ function mergeKnownNodesIntoSeeds(knownNodes){
   }
 }
 
-function seedDedupKey(n){
-  return (n.node_id && n.worker_id) ? `cw:${n.node_id}:${n.worker_id}` :
-         (n.node_id ? `cn:${n.node_id}` : `url:${n.url}`);
-}
+/* REPLACED discoverSeeds(): now merges token scan + learned known_nodes */
+async function discoverSeeds(){
+  const results = await scanSeedsOnce();
 
-function mergeSeedLists(existing, incoming){
-  const dedup = new Map();
-  for (const n of [...existing, ...incoming].sort((a,b)=>(a.latency_ms||99999)-(b.latency_ms||99999))) {
-    const k = seedDedupKey(n);
-    if (!dedup.has(k)) dedup.set(k, n);
-    else {
-      const prev = dedup.get(k);
-      // prefer fresher/lower latency
-      if ((n.latency_ms || 99999) < (prev.latency_ms || 99999)) dedup.set(k, n);
-    }
+  // learned direct node hints (from heartbeat known_nodes)
+  const hintedUrls = Array.from(STATE.discoveredNodeUrls);
+  const hintedHello = [];
+  for (const u of hintedUrls){
+    try {
+      const hello = await helloSeed(u);
+      hintedHello.push({ token_name: "hint", token_index: 0, ...hello });
+    } catch {}
   }
-  return Array.from(dedup.values()).sort((a,b)=>(a.latency_ms||99999)-(b.latency_ms||99999));
-}
 
-async function promoteDiscoveredSeeds(foundBatch){
-  if (!foundBatch?.length) return;
+  const all = [...results, ...hintedHello];
 
-  const beforeUrls = new Set(STATE.connectedSeeds.map(s => s.url));
-  STATE.seeds = mergeSeedLists(STATE.seeds, foundBatch);
-  STATE.connectedSeeds = STATE.seeds.slice(0, MAX_CONNECTED_SEEDS);
+  const dedup = new Map();
+  for (const n of all.sort((a,b)=>a.latency_ms-b.latency_ms)) {
+    // dedupe by cluster worker if available, else cluster node, else url
+    const key =
+      (n.node_id && n.worker_id) ? `cw:${n.node_id}:${n.worker_id}` :
+      (n.node_id ? `cn:${n.node_id}` : `url:${n.url}`);
+    if (!dedup.has(key)) dedup.set(key, n);
+  }
 
+  const unique = Array.from(dedup.values()).sort((a,b)=>a.latency_ms-b.latency_ms);
+  STATE.seeds = unique;
+  STATE.connectedSeeds = unique.slice(0, MAX_CONNECTED_SEEDS);
+
+  // keep all connected seeds in discovered cache so they can be gossiped out
   for (const s of STATE.connectedSeeds) addDiscoveredSeedUrl(s.url);
 
-  // Also probe discovered known_nodes lazily (best effort, no blocking)
-  const hints = Array.from(STATE.discoveredNodeUrls).slice(0, 20);
-  for (const u of hints) {
-    if (STATE.seeds.some(s => s.url === u)) continue;
-    helloSeed(u).then((hello) => {
-      STATE.seeds = mergeSeedLists(STATE.seeds, [{ token_name:"hint", token_index:0, ...hello }]);
-      STATE.connectedSeeds = STATE.seeds.slice(0, MAX_CONNECTED_SEEDS);
-      for (const s of STATE.connectedSeeds) addDiscoveredSeedUrl(s.url);
-      scheduleSeedApplySideEffects();
-    }).catch(()=>{});
-  }
-
-  scheduleSeedApplySideEffects();
-
-  const afterUrls = new Set(STATE.connectedSeeds.map(s => s.url));
-  const changed = beforeUrls.size !== afterUrls.size || [...beforeUrls].some(u => !afterUrls.has(u));
-  if (changed && STATE.online) {
-    startAllPollLoops();
-    try { await sendHeartbeatAll(); } catch {}
-  }
-}
-
-function scheduleSeedApplySideEffects(){
-  if (STATE._seedApplyScheduled) return;
-  STATE._seedApplyScheduled = true;
-  queueMicrotask(() => {
-    STATE._seedApplyScheduled = false;
-    updateMiniStats();
-    if (STATE.connectedSeeds.length) setStatus("netStatus", `Connected to ${STATE.connectedSeeds.length} seed(s)`, "ok");
-    else setStatus("netStatus", "Disconnected", "warn");
-  });
-}
-
-function getNextTokenIndexForWorker(){
-  const ts = STATE.tokenScan;
-
-  while (ts.queuePriority.length) {
-    const n = ts.queuePriority.shift();
-    if (!Number.isInteger(n) || n <= 0) continue;
-    if (ts.inFlightIndexes.has(n) || ts.doneIndexes.has(n)) continue;
-    ts.inFlightIndexes.add(n);
-    return n;
-  }
-
-  // infinite ascending scan
-  let n = ts.nextIndex;
-  while (ts.inFlightIndexes.has(n) || ts.doneIndexes.has(n)) n++;
-  ts.nextIndex = n + 1;
-  ts.inFlightIndexes.add(n);
-  return n;
-}
-
-async function flushFoundBufferIfNeeded(force=false){
-  const ts = STATE.tokenScan;
-  if (!force && ts.foundBuffer.length < TOKEN_PROMOTE_BATCH_SIZE) return;
-  if (!ts.foundBuffer.length) return;
-
-  const batch = ts.foundBuffer.splice(0, TOKEN_PROMOTE_BATCH_SIZE);
-  ts.lastPromoteAt = Date.now();
-  await promoteDiscoveredSeeds(batch);
-}
-
-async function tokenScanWorkerLoop(workerId){
-  const { owner, repo, branch } = REPO_CFG;
-  const ts = STATE.tokenScan;
-
-  while (ts.running) {
-    const idx = getNextTokenIndexForWorker();
-    const tokenName = `token${idx}`;
-
-    try {
-      const tok = await fetchTokenUrlPuterOnly(owner, repo, branch, tokenName);
-      const hello = await helloSeed(tok.url);
-
-      const node = {
-        token_name: tokenName,
-        token_index: idx,
-        ...hello
-      };
-
-      ts.foundBuffer.push(node);
-      rememberLiveTokenIndex(idx);
-
-      ts.completedSinceLastPromote++;
-      await flushFoundBufferIfNeeded(false);
-
-      // connect as soon as we find anything early on
-      if (STATE.connectedSeeds.length === 0) {
-        await flushFoundBufferIfNeeded(true);
-      }
-    } catch {
-      // ignore misses/failures; infinite lazy scan continues
-    } finally {
-      ts.inFlightIndexes.delete(idx);
-      ts.doneIndexes.add(idx);
-      ts.completedSinceLastPromote++;
-
-      // periodically flush partial successful batch so we don't wait too long
-      if (ts.foundBuffer.length && (Date.now() - ts.lastPromoteAt > 1200 || ts.completedSinceLastPromote >= TOKEN_SCAN_CONCURRENCY)) {
-        try { await flushFoundBufferIfNeeded(true); } catch {}
-        ts.completedSinceLastPromote = 0;
-      }
-
-      // keep memory bounded (important for infinite scanning)
-      if (ts.doneIndexes.size > 50000) {
-        // keep only the most recent / cached "likely alive" info in cache; reset done set and continue
-        ts.doneIndexes.clear();
-        ts.inFlightIndexes.clear();
-        const cached = getCachedLiveTokenIndexes();
-        ts.queuePriority = [...new Set([...cached, ...ts.queuePriority])];
-      }
-    }
-
-    // tiny pause if we still have no seeds, so UI remains responsive
-    if (!STATE.connectedSeeds.length) await sleep(TOKEN_SCAN_EMPTY_PAUSE_MS);
-  }
-}
-
-async function discoverSeeds(){
-  // "Warm start" helper: seed the priority queue with cached token indexes
-  const ts = STATE.tokenScan;
-  const cached = getCachedLiveTokenIndexes();
-  ts.queuePriority = [...new Set([...cached, ...ts.queuePriority])];
-
-  // Also try known_nodes immediately if present
-  const hintedUrls = Array.from(STATE.discoveredNodeUrls);
-  if (hintedUrls.length) {
-    const hintedHello = [];
-    await Promise.all(hintedUrls.slice(0, 10).map(async (u) => {
-      try { hintedHello.push({ token_name:"hint", token_index:0, ...(await helloSeed(u)) }); } catch {}
-    }));
-    if (hintedHello.length) await promoteDiscoveredSeeds(hintedHello);
-  }
-
-  // Wait a short warmup to let the background pool find at least something
-  const start = Date.now();
-  while (!STATE.connectedSeeds.length && (Date.now() - start) < 4000) {
-    await flushFoundBufferIfNeeded(true);
-    if (STATE.connectedSeeds.length) break;
-    await sleep(120);
-  }
-
-  scheduleSeedApplySideEffects();
-  return STATE.connectedSeeds;
+  updateMiniStats();
+  if (STATE.connectedSeeds.length) setStatus("netStatus", `Connected to ${STATE.connectedSeeds.length} seed(s)`, "ok");
+  else setStatus("netStatus", "Disconnected", "warn");
 }
 
 async function startSeedScanLoop(){
   if (STATE.tokenScan.running) return;
-  const ts = STATE.tokenScan;
-  ts.running = true;
-  ts.activeWorkers = TOKEN_SCAN_CONCURRENCY;
+  STATE.tokenScan.running = true;
 
-  // prioritize cached "likely alive" token numbers first
-  ts.queuePriority = [...new Set([...getCachedLiveTokenIndexes(), ...ts.queuePriority])];
-
-  for (let w = 0; w < TOKEN_SCAN_CONCURRENCY; w++) {
-    tokenScanWorkerLoop(w).catch(() => {});
-  }
-
-  // periodic flush/maintenance loop
   (async () => {
-    while (ts.running) {
+    while (STATE.tokenScan.running) {
       try {
-        await flushFoundBufferIfNeeded(true);
+        await discoverSeeds();
 
-        // periodic peer refresh if online and we already have seeds
-        if (STATE.online && STATE.connectedSeeds.length) {
-          await sendHeartbeatAll().catch(()=>{});
+        if (STATE.online) {
+          startAllPollLoops();
+          await sendHeartbeatAll();
         }
-      } catch {}
-      await sleep(NETWORK_REFRESH_MS);
+      } catch {
+        setStatus("netStatus", "Disconnected", "err");
+      }
+
+      await sleep(TOKEN_SCAN_BACKOFF_MS);
     }
   })();
 }
-
-function stopSeedScanLoop(){
-  STATE.tokenScan.running = false;
-}
+function stopSeedScanLoop(){ STATE.tokenScan.running = false; }
 
 /* =========================================================
    NETWORK / HEARTBEAT
@@ -1385,15 +1223,14 @@ async function postToSeed(seedUrl, path, body){
   return await fetchJson(noCacheUrl(seedUrl.replace(/\/+$/,"") + path), {
     method:"POST",
     headers:{ "Content-Type":"application/json" },
-    body: JSON.stringify(body),
-    timeoutMs: 5000
+    body: JSON.stringify(body)
   });
 }
-
 async function getFromSeed(seedUrl, path){
-  return await fetchJson(noCacheUrl(seedUrl.replace(/\/+$/,"") + path), { timeoutMs: 25000 });
+  return await fetchJson(noCacheUrl(seedUrl.replace(/\/+$/,"") + path));
 }
 
+/* UPGRADED: send known_nodes hints to server */
 async function sendHeartbeatToSeed(seed){
   const known_nodes = Array.from(STATE.discoveredNodeUrls)
     .slice(0, 50)
@@ -1415,6 +1252,7 @@ async function sendHeartbeatToSeed(seed){
   });
 }
 
+/* UPGRADED: merge known_nodes returned by server */
 async function sendHeartbeatAll(){
   if (!STATE.online || !STATE.connectedSeeds.length) return;
 
@@ -1426,6 +1264,7 @@ async function sendHeartbeatAll(){
       const j = await sendHeartbeatToSeed(seed);
       nextConnected.push(seed);
 
+      // learn new node URLs from cluster-aware servers
       mergeKnownNodesIntoSeeds(j?.known_nodes || []);
 
       const peers = Array.isArray(j?.peers) ? j.peers : [];
@@ -1488,9 +1327,7 @@ function stopHeartbeatLoop(){
 async function autoLogin(force=false){
   try {
     ensureIdentity();
-
     if (!STATE.connectedSeeds.length || force) {
-      // warm-up discovery, while background pool keeps scanning forever
       await discoverSeeds();
     }
 
@@ -1501,7 +1338,7 @@ async function autoLogin(force=false){
 
     setStatus("idStatus", `Online as ${STATE.identity}`, "ok");
     if (STATE.connectedSeeds.length) setStatus("netStatus", `Connected to ${STATE.connectedSeeds.length} seed(s)`, "ok");
-    else setStatus("netStatus", "Scanning tokens…", "warn");
+    else setStatus("netStatus", "Disconnected", "warn");
 
     updateHeaderPills();
     addSystemMessage(`You are online as ${STATE.peerId}(${STATE.identity})`);
@@ -1571,12 +1408,8 @@ function renderPeers(){
 }
 
 async function refreshPeersNow(){
-  try {
-    if (!STATE.connectedSeeds.length) await discoverSeeds();
-    await sendHeartbeatAll();
-  } catch {
-    setStatus("netStatus", "Disconnected", "err");
-  }
+  try { await sendHeartbeatAll(); }
+  catch { setStatus("netStatus", "Disconnected", "err"); }
 }
 
 /* =========================================================
@@ -1635,8 +1468,12 @@ async function signalSeedRequest(path, body, preferredSeedUrl){
 /* =========================================================
    CALL / CONNECT ACTIONS
 ========================================================= */
-async function connectSelectedData(){ await dialPeer("data"); }
-async function dialSelectedMedia(){ await dialPeer("media"); }
+async function connectSelectedData(){
+  await dialPeer("data");
+}
+async function dialSelectedMedia(){
+  await dialPeer("media");
+}
 
 async function dialPeer(mode){
   try {
@@ -1653,7 +1490,7 @@ async function dialPeer(mode){
     const r = await signalSeedRequest("/api/peer/invite", {
       caller: STATE.peerId,
       callee: STATE.selectedPeer,
-      session_kind: mode
+      session_kind: mode // harmless if server ignores
     });
 
     STATE.activeSeedUrl = r.seedUrl;
@@ -1753,7 +1590,8 @@ function renderIncomingBar(){
     bar.classList.remove("show");
     return;
   }
-  $("incomingText").textContent = `Incoming request from ${STATE.incomingCall.from}`;
+  const from = STATE.incomingCall.from;
+  $("incomingText").textContent = `Incoming request from ${from}`;
   bar.classList.add("show");
 }
 
@@ -1958,8 +1796,12 @@ async function createPc(polite, callId, peerId, mode="data"){
 }
 
 function wireChatChannel(dc){
-  dc.onopen = () => addSystemMessage("Chat channel ready");
-  dc.onclose = () => addSystemMessage("Chat channel closed");
+  dc.onopen = () => {
+    addSystemMessage("Chat channel ready");
+  };
+  dc.onclose = () => {
+    addSystemMessage("Chat channel closed");
+  };
   dc.onerror = () => {};
 
   dc.onmessage = (e) => {
@@ -2036,9 +1878,11 @@ function wireFileChannel(dc){
         renderChatHistory();
         return;
       }
+
       return;
     }
 
+    // binary chunk
     const activeTransfers = Object.values(STATE.fileRecv);
     if (!activeTransfers.length) return;
     const rec = activeTransfers[activeTransfers.length - 1];
@@ -2159,6 +2003,7 @@ async function handleSignal(ev){
   if (!STATE.pc) {
     const activeMatch = STATE.activeCallId && STATE.activeCallId === call_id;
     if (!activeMatch) return;
+    // If we don't know, assume data session until tracks appear
     await createPc(false, call_id, from, STATE.sessionMode === "connecting" ? (STATE.outgoingRequestedMode || "data") : (STATE.sessionMode || "data"));
   }
 
@@ -2276,21 +2121,21 @@ async function boot(){
     setStatus("idStatus", "Use HTTPS for camera", "warn");
   }
 
-  // start infinite lazy background scan (pool of 5)
   startSeedScanLoop();
 
-  // warmup: use cached token indexes first + any known node hints
   try { await discoverSeeds(); } catch {}
 
-  // go online even if scan is still ongoing; seeds will attach as they appear
   await autoLogin(false);
 
   if (STATE.networkTickTimer) clearInterval(STATE.networkTickTimer);
   STATE.networkTickTimer = setInterval(async () => {
     try {
-      // background scanner already runs forever; this just nudges flush/heartbeat
-      await flushFoundBufferIfNeeded(true);
-      if (STATE.online && STATE.connectedSeeds.length) {
+      const before = new Set(STATE.connectedSeeds.map(n => n.url));
+      await discoverSeeds();
+      const after = new Set(STATE.connectedSeeds.map(n => n.url));
+      const changed = before.size !== after.size || [...before].some(u => !after.has(u));
+      if (changed && STATE.online) {
+        startAllPollLoops();
         await sendHeartbeatAll();
       }
     } catch {}
