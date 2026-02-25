@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>P2P Peer Client</title>
+  <title>P2P Peer Client (v3 seed/bridge)</title>
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
   <meta http-equiv="Pragma" content="no-cache" />
   <meta http-equiv="Expires" content="0" />
@@ -204,7 +204,7 @@
       box-shadow: inset 0 0 0 1px rgba(124,58,237,.15);
     }
     .peer .name{
-      font-weight:600;
+      font-weight:700;
       font-size:13px;
       line-height:1.2;
     }
@@ -212,6 +212,10 @@
       color:var(--muted);
       font-size:11px;
       margin-top:3px;
+      overflow:hidden;
+      text-overflow:ellipsis;
+      white-space:nowrap;
+      max-width:220px;
     }
     .badge{
       border-radius:999px;
@@ -382,7 +386,7 @@
     }
     .metaLine .who{
       color:#dbeafe;
-      font-weight:600;
+      font-weight:700;
       overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
     }
     .metaLine .time{
@@ -408,7 +412,7 @@
       display:flex; justify-content:space-between; gap:8px; align-items:center;
       font-size:12px;
     }
-    .fileName{font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+    .fileName{font-weight:700; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
     .fileSize{color:var(--muted); font-size:11px; white-space:nowrap}
     .fileState{
       margin-top:6px; font-size:11px; color:var(--muted);
@@ -488,6 +492,7 @@
     }
   </style>
 </head>
+
 <body>
   <div class="app">
     <!-- SIDEBAR -->
@@ -537,8 +542,8 @@
           <button class="secondary" onclick="refreshPeersNow()">↻</button>
         </div>
         <div class="stats" style="margin-top:8px">
-          <div class="stat"><div class="k">Connected</div><div class="v" id="statSeeds">0</div></div>
-          <div class="stat"><div class="k">Visible</div><div class="v" id="statPeers">0</div></div>
+          <div class="stat"><div class="k">Seeds</div><div class="v" id="statSeeds">0</div></div>
+          <div class="stat"><div class="k">Peers</div><div class="v" id="statPeers">0</div></div>
         </div>
       </div>
 
@@ -601,7 +606,7 @@
               <input id="fileInput" type="file" />
               <button class="secondary" onclick="sendSelectedFile()">Send File</button>
             </div>
-            <span class="muted">You can chat/file-share with a peer after Connect or Call.</span>
+            <span class="muted">Chat/file-share works after Connect or Call.</span>
           </div>
 
           <div class="composerMain">
@@ -617,48 +622,61 @@
 /* =========================================================
    CONFIG / STATE
 ========================================================= */
-const STARTUP_RELOAD_FLAG = "__p2p_peer_client_reloaded_once__";
-const HEARTBEAT_MS = 5000;
-const NETWORK_REFRESH_MS = 15000;
-const MAX_CONNECTED_SEEDS = 8; // cluster-aware: allow more workers/seeds
 
-// Internal token/seed discovery (hidden from UI)
+const STARTUP_RELOAD_FLAG = "__p2p_peer_client_reloaded_once__";
+
+// Fast network reflection
+const HEARTBEAT_MS = 3000;
+const NETWORK_REFRESH_MS = 12000;
+const MAX_CONNECTED_SEEDS = 10;
+
+// Token scan discovery
 const TOKEN_SCAN_MAX = 999;
 const TOKEN_SCAN_STOP_AFTER_CONSECUTIVE_MISSES = 10;
-const TOKEN_SCAN_BACKOFF_MS = 10000;
+const TOKEN_SCAN_BACKOFF_MS = 9000;
 
 // Internal repo (hidden from UI)
-const REPO_CFG = {
-  owner: "ahmed25abbas",
-  repo: "tokens",
-  branch: "main"
-};
-
+const REPO_CFG = { owner: "ahmed25abbas", repo: "tokens", branch: "main" };
 const GITHUB_FETCH = { byToken: {} };
+
+// Dedup sizes
+const EVENT_DEDUP_MAX = 2000;
+const MSG_DEDUP_MAX = 2000;
+
+// Default ICE until we fetch from server
+let RTC_CONFIG = {
+  iceServers: [{ urls: ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"] }]
+};
 
 const STATE = {
   seeds: [],
   connectedSeeds: [],
   seedPollLoops: new Map(),
+  seedStreams: new Map(), // seedUrl -> EventSource
 
-  // NEW: cluster discovery cache (learned from /api/peer/heartbeat known_nodes)
   discoveredNodeUrls: new Set(),
 
-  peerId: "",          // hidden numeric id for protocol
-  identity: "",        // user-editable single visible identity (name)
+  // Identity:
+  peerUid: "",       // private, stable (stored locally)
+  peerName: "",      // visible name
+  myPeerKey: "",     // server-derived opaque key (uid:name)
   online: false,
-  peersById: new Map(),
-  selectedPeer: "",
+
+  // Peers (addressed by peer_key)
+  peersByKey: new Map(), // peer_key -> {peer_key,name,capabilities,home_node_url,signaling_via_node,last_seen_ts,sourceSeedUrl}
+
+  selectedPeerKey: "",
 
   incomingCall: null,
   activeCallId: "",
-  activePeer: "",
+  activePeerKey: "",
   activeSeedUrl: "",
   sessionMode: "idle", // idle | connecting | data | media
   outgoingRequestedMode: "data",
 
   heartbeatTimer: null,
   networkTickTimer: null,
+  iceTickTimer: null,
 
   localStream: null,
   remoteStream: null,
@@ -671,27 +689,27 @@ const STATE = {
   polite: false,
   pendingIce: [],
 
-  fileRecv: {}, // by transfer id
+  fileRecv: {}, // transfer_id -> {meta,chunks,bytesReceived,msgId}
   fileSendBusy: false,
 
-  chatHistory: [], // rendered timeline entries
+  // Dedup sets
+  seenEventIds: new LruSet(EVENT_DEDUP_MAX),
+  seenMsgIds: new LruSet(MSG_DEDUP_MAX),
+  seenTransferIds: new LruSet(MSG_DEDUP_MAX),
 
-  tokenScan: {
-    running: false,
-    missStreak: 0,
-    index: 1,
-    lastCycleStartedAt: 0,
-  }
-};
+  // Chat timeline
+  chatHistory: [],
 
-const RTC_CONFIG = {
-  iceServers: [{ urls: ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"] }]
+  tokenScan: { running:false }
 };
 
 /* =========================================================
-   UI HELPERS
+   SMALL UTILS
 ========================================================= */
 function $(id){ return document.getElementById(id); }
+function sleep(ms){ return new Promise(r => setTimeout(r, ms)); }
+
+function now(){ return Date.now(); }
 
 function setStatus(elId, msg, type="ok"){
   const root = $(elId);
@@ -699,22 +717,6 @@ function setStatus(elId, msg, type="ok"){
   if (!root || !textEl) return;
   root.className = "status " + (type || "ok");
   textEl.textContent = msg;
-}
-
-function formatTime(ts){
-  try{
-    return new Date(ts).toLocaleTimeString([], {hour:"2-digit", minute:"2-digit"});
-  }catch{
-    return "";
-  }
-}
-
-function formatBytes(n){
-  const x = Number(n)||0;
-  if (x < 1024) return `${x} B`;
-  if (x < 1024*1024) return `${(x/1024).toFixed(1)} KB`;
-  if (x < 1024*1024*1024) return `${(x/1024/1024).toFixed(1)} MB`;
-  return `${(x/1024/1024/1024).toFixed(1)} GB`;
 }
 
 function safeName(s){ return String(s ?? "").trim() || "Unknown"; }
@@ -725,14 +727,17 @@ function escapeHtml(s){
   ));
 }
 
-function randomNumericId(len=8){
-  let s = "";
-  for (let i=0;i<len;i++) s += Math.floor(Math.random()*10);
-  if (s[0] === "0") s = "1" + s.slice(1);
-  return s;
+function formatTime(ts){
+  try { return new Date(ts).toLocaleTimeString([], {hour:"2-digit", minute:"2-digit"}); }
+  catch { return ""; }
 }
-
-function sleep(ms){ return new Promise(r => setTimeout(r, ms)); }
+function formatBytes(n){
+  const x = Number(n)||0;
+  if (x < 1024) return `${x} B`;
+  if (x < 1024*1024) return `${(x/1024).toFixed(1)} KB`;
+  if (x < 1024*1024*1024) return `${(x/1024/1024).toFixed(1)} MB`;
+  return `${(x/1024/1024/1024).toFixed(1)} GB`;
+}
 
 function noCacheUrl(url){
   const u = new URL(url, window.location.href);
@@ -764,31 +769,47 @@ function updateVideoHints(){
 function toggleFullscreen(id){
   const el = $(id);
   if (!el) return;
-  if (document.fullscreenElement) {
-    document.exitFullscreen?.();
-  } else {
-    el.requestFullscreen?.();
-  }
+  if (document.fullscreenElement) document.exitFullscreen?.();
+  else el.requestFullscreen?.();
 }
 
 function updateHeaderPills(){
-  $("selfPill").textContent = `You: ${STATE.peerId}(${STATE.identity || STATE.peerId})`;
-  const p = STATE.selectedPeer ? STATE.peersById.get(STATE.selectedPeer) : null;
+  $("selfPill").textContent =
+    STATE.myPeerKey
+      ? `You: ${STATE.peerName} (key:${STATE.myPeerKey.slice(0,6)}…)`
+      : `You: ${STATE.peerName || "-"}`;
+
+  const p = STATE.selectedPeerKey ? STATE.peersByKey.get(STATE.selectedPeerKey) : null;
   $("selectedPill").textContent = p
-    ? `Peer: ${p.peer_id}(${p.display_name || p.peer_id})`
+    ? `Peer: ${p.name} (key:${p.peer_key.slice(0,6)}…)`
     : "Peer: none";
+
   $("sessionPill").textContent = `Session: ${STATE.sessionMode}`;
 }
 
 function updateMiniStats(){
   $("statSeeds").textContent = String(STATE.connectedSeeds.length);
-  $("statPeers").textContent = String(STATE.peersById.size);
+  $("statPeers").textContent = String(STATE.peersByKey.size);
   $("seedChip").textContent = `Seeds: ${STATE.connectedSeeds.length}`;
-  $("peerChip").textContent = `Peers: ${STATE.peersById.size}`;
+  $("peerChip").textContent = `Peers: ${STATE.peersByKey.size}`;
 }
 
-function simpleError(prefix, fallback){
-  return `${prefix}: ${fallback || "Something went wrong"}`;
+/* =========================================================
+   LRU SET (DEDUP)
+========================================================= */
+function LruSet(maxSize){
+  this.maxSize = Math.max(100, maxSize|0);
+  this.map = new Map();
+}
+LruSet.prototype.has = function(k){ return this.map.has(k); }
+LruSet.prototype.add = function(k){
+  if (!k) return;
+  if (this.map.has(k)) { this.map.delete(k); this.map.set(k, 1); return; }
+  this.map.set(k, 1);
+  if (this.map.size > this.maxSize){
+    const first = this.map.keys().next().value;
+    this.map.delete(first);
+  }
 }
 
 /* =========================================================
@@ -798,25 +819,13 @@ function addChatEntry(entry){
   STATE.chatHistory.push(entry);
   renderChatHistory();
 }
-
 function addSystemMessage(text){
-  addChatEntry({
-    kind: "system",
-    text: String(text || ""),
-    ts: Date.now()
-  });
-}
-
-function whoLabel(me, peer){
-  if (me) return `${STATE.peerId}(${STATE.identity || STATE.peerId})`;
-  if (!peer) return "Peer";
-  return `${peer.peer_id}(${peer.display_name || peer.peer_id})`;
+  addChatEntry({ kind:"system", text:String(text||""), ts:Date.now() });
 }
 
 function renderChatHistory(){
   const root = $("chatHistory");
   root.innerHTML = `<div class="daySep">Today</div>`;
-
   for (const m of STATE.chatHistory){
     const wrap = document.createElement("div");
     wrap.className = `msg ${m.role || "system"}`;
@@ -827,7 +836,7 @@ function renderChatHistory(){
       continue;
     }
 
-    const metaWho = m.who || (m.role === "me" ? whoLabel(true) : whoLabel(false, m.peer));
+    const metaWho = m.who || (m.role === "me" ? STATE.peerName : (m.peer?.name || "Peer"));
     const time = formatTime(m.ts || Date.now());
 
     const bubble = document.createElement("div");
@@ -842,6 +851,9 @@ function renderChatHistory(){
 
     if (m.kind === "chat"){
       inner += `<div class="msgText">${escapeHtml(m.text || "")}</div>`;
+      if (m.ack){
+        inner += `<div class="muted" style="margin-top:6px;font-size:11px">${escapeHtml(m.ack)}</div>`;
+      }
     }
 
     if (m.kind === "file"){
@@ -858,8 +870,6 @@ function renderChatHistory(){
             <span>${escapeHtml(rec.state || "pending")}</span>
             <div class="fileActions">
               ${canDownload ? `<button class="miniBtn" onclick="downloadPendingFile('${fileId}')">Download</button>` : ""}
-              ${m.role !== "me" ? `<button class="miniBtn" onclick="toggleKeepPendingFile('${fileId}')">${rec.kept ? "Kept" : "Keep Pending"}</button>` : ""}
-              ${m.role !== "me" ? `<button class="miniBtn" onclick="discardPendingFile('${fileId}')">Discard</button>` : ""}
             </div>
           </div>
         </div>
@@ -870,7 +880,6 @@ function renderChatHistory(){
     wrap.appendChild(bubble);
     root.appendChild(wrap);
   }
-
   root.scrollTop = root.scrollHeight;
 }
 
@@ -891,61 +900,42 @@ function downloadPendingFile(id){
   renderChatHistory();
 }
 
-function toggleKeepPendingFile(id){
-  const item = findChatEntryById(id);
-  if (!item?.file) return;
-  item.file.kept = !item.file.kept;
-  if (item.file.kept && item.file.state === "received") item.file.state = "kept in chat";
-  if (!item.file.kept && item.file.state === "kept in chat") item.file.state = "received";
-  renderChatHistory();
-}
-
-function discardPendingFile(id){
-  const item = findChatEntryById(id);
-  if (!item?.file) return;
-  if (item.file.blob && item.file.blobUrl) {
-    try { URL.revokeObjectURL(item.file.blobUrl); } catch {}
-  }
-  item.file.blob = null;
-  item.file.state = "discarded";
-  renderChatHistory();
-}
-
 /* =========================================================
-   STORAGE / IDENTITY (single visible input)
+   STORAGE / IDENTITY
+   - peerUid is PRIVATE and never shown
+   - peerName is visible
 ========================================================= */
 function getStoredIdentity(){
-  try { return JSON.parse(localStorage.getItem("p2p_identity_v2") || "{}"); }
+  try { return JSON.parse(localStorage.getItem("p2p_identity_v3") || "{}"); }
   catch { return {}; }
 }
-
 function saveStoredIdentity(){
   try {
-    localStorage.setItem("p2p_identity_v2", JSON.stringify({
-      peerId: STATE.peerId,   // hidden stable numeric id
-      identity: STATE.identity
+    localStorage.setItem("p2p_identity_v3", JSON.stringify({
+      peerUid: STATE.peerUid,
+      peerName: STATE.peerName
     }));
   } catch {}
 }
-
 function ensureIdentity(){
   const saved = getStoredIdentity();
-  STATE.peerId = (/^\d{6,14}$/.test(saved.peerId || "")) ? saved.peerId : randomNumericId(8);
-  STATE.identity = safeName(saved.identity || "").slice(0, 40);
-  if (!STATE.identity || STATE.identity === "Unknown") STATE.identity = `User${STATE.peerId.slice(-4)}`;
+  STATE.peerUid = (saved.peerUid && String(saved.peerUid).length >= 10) ? String(saved.peerUid) :
+    (crypto?.randomUUID ? crypto.randomUUID() : `uid-${Date.now()}-${Math.random().toString(36).slice(2,10)}`);
 
-  $("identityInput").value = STATE.identity;
+  STATE.peerName = safeName(saved.peerName || "").slice(0, 40);
+  if (!STATE.peerName || STATE.peerName === "Unknown") STATE.peerName = `User${STATE.peerUid.slice(-4)}`;
+
+  $("identityInput").value = STATE.peerName;
   saveStoredIdentity();
   updateHeaderPills();
 }
-
 function saveIdentity(){
   const typed = safeName($("identityInput").value).slice(0,40);
-  STATE.identity = typed;
-  $("identityInput").value = STATE.identity;
+  STATE.peerName = typed;
+  $("identityInput").value = STATE.peerName;
   saveStoredIdentity();
   updateHeaderPills();
-  setStatus("idStatus", `Saved as ${STATE.identity}`, "ok");
+  setStatus("idStatus", `Saved as ${STATE.peerName}`, "ok");
 }
 
 /* =========================================================
@@ -972,19 +962,11 @@ async function clearCachesOnceAndReload(){
 }
 
 /* =========================================================
-   INTERNAL SEED DISCOVERY (hidden in UI)
+   INTERNAL SEED DISCOVERY (GitHub tokens) + known_nodes gossip
 ========================================================= */
-function createSourceState(){
-  return { latestValue:"", lastChosenValue:"", previousValues:[], blacklist:[] };
-}
+function createSourceState(){ return { latestValue:"", lastChosenValue:"", previousValues:[] }; }
 function createTokenMeta(){
-  return {
-    sources: { puter:createSourceState() },
-    effectiveValue: "",
-    fetchedAt: 0,
-    lastSourceUsed: "",
-    lastReason: ""
-  };
+  return { sources:{ puter:createSourceState() }, effectiveValue:"", fetchedAt:0, lastSourceUsed:"", lastReason:"" };
 }
 function getTokenMeta(tokenName){
   if (!GITHUB_FETCH.byToken[tokenName]) GITHUB_FETCH.byToken[tokenName] = createTokenMeta();
@@ -1001,8 +983,7 @@ function markSourceSeen(tokenName, value){
   st.previousValues = pushUniqueFront(st.previousValues, value, 3);
 }
 function markSourceChosen(tokenName, value){
-  const st = getTokenMeta(tokenName).sources.puter;
-  st.lastChosenValue = value;
+  getTokenMeta(tokenName).sources.puter.lastChosenValue = value;
 }
 function buildGithubUrls(owner, repo, branch, path){
   return { blobUrl: `https://github.com/${owner}/${repo}/blob/${branch}/${path}` };
@@ -1078,8 +1059,8 @@ async function fetchTokenUrlPuterOnly(owner, repo, branch, tokenName){
   const urls = buildGithubUrls(owner, repo, branch, tokenName);
   const rawText = await fetchGithubFilePuter(urls.blobUrl);
   const url = validateSeedUrl(rawText);
-
   markSourceSeen(tokenName, url);
+
   const meta = getTokenMeta(tokenName);
   const prevEffective = meta.effectiveValue || "";
   meta.effectiveValue = url;
@@ -1088,13 +1069,7 @@ async function fetchTokenUrlPuterOnly(owner, repo, branch, tokenName){
   meta.lastReason = "puter_only";
   markSourceChosen(tokenName, url);
 
-  return {
-    tokenName,
-    url,
-    sourceUsed: "puter",
-    changed: !!prevEffective && prevEffective !== url,
-    previousValue: prevEffective || null
-  };
+  return { tokenName, url, changed: !!prevEffective && prevEffective !== url };
 }
 
 async function helloSeed(url){
@@ -1102,45 +1077,16 @@ async function helloSeed(url){
   const t0 = performance.now();
   const j = await fetchJson(noCacheUrl(base + "/api/node/hello"));
   const latency = Math.round(performance.now() - t0);
-
-  // cluster node compatibility: prefer cluster_node_id + worker_id if present
   return {
     url: base,
     latency_ms: latency,
-    node_id: j?.node?.cluster_node_id || j?.node?.node_id || null,
+    cluster_node_id: j?.node?.cluster_node_id || null,
     worker_id: j?.node?.worker_id || null,
     peers_online: j?.node?.peers_online ?? null,
     raw: j
   };
 }
 
-async function scanSeedsOnce(){
-  const { owner, repo, branch } = REPO_CFG;
-  const found = [];
-  let missStreak = 0;
-
-  for (let i = 1; i <= TOKEN_SCAN_MAX; i++) {
-    const tokenName = `token${i}`;
-    try {
-      const tok = await fetchTokenUrlPuterOnly(owner, repo, branch, tokenName);
-      const hello = await helloSeed(tok.url);
-      found.push({
-        token_name: tokenName,
-        token_index: i,
-        ...hello
-      });
-      missStreak = 0;
-    } catch {
-      missStreak++;
-      if (missStreak >= TOKEN_SCAN_STOP_AFTER_CONSECUTIVE_MISSES) break;
-    }
-  }
-  return found;
-}
-
-/* =========================================================
-   CLUSTER DISCOVERY UPGRADE (known_nodes gossip from server)
-========================================================= */
 function addDiscoveredSeedUrl(url){
   const u = String(url || "").trim().replace(/\/+$/,"");
   if (!/^https?:\/\//i.test(u)) return;
@@ -1156,11 +1102,30 @@ function mergeKnownNodesIntoSeeds(knownNodes){
   }
 }
 
-/* REPLACED discoverSeeds(): now merges token scan + learned known_nodes */
+async function scanSeedsOnce(){
+  const { owner, repo, branch } = REPO_CFG;
+  const found = [];
+  let missStreak = 0;
+
+  for (let i = 1; i <= TOKEN_SCAN_MAX; i++) {
+    const tokenName = `token${i}`;
+    try {
+      const tok = await fetchTokenUrlPuterOnly(owner, repo, branch, tokenName);
+      const hello = await helloSeed(tok.url);
+      found.push({ token_name: tokenName, token_index: i, ...hello });
+      missStreak = 0;
+    } catch {
+      missStreak++;
+      if (missStreak >= TOKEN_SCAN_STOP_AFTER_CONSECUTIVE_MISSES) break;
+    }
+  }
+  return found;
+}
+
 async function discoverSeeds(){
   const results = await scanSeedsOnce();
 
-  // learned direct node hints (from heartbeat known_nodes)
+  // Also try hinted nodes from known_nodes gossip
   const hintedUrls = Array.from(STATE.discoveredNodeUrls);
   const hintedHello = [];
   for (const u of hintedUrls){
@@ -1171,13 +1136,11 @@ async function discoverSeeds(){
   }
 
   const all = [...results, ...hintedHello];
-
   const dedup = new Map();
   for (const n of all.sort((a,b)=>a.latency_ms-b.latency_ms)) {
-    // dedupe by cluster worker if available, else cluster node, else url
-    const key =
-      (n.node_id && n.worker_id) ? `cw:${n.node_id}:${n.worker_id}` :
-      (n.node_id ? `cn:${n.node_id}` : `url:${n.url}`);
+    const key = (n.cluster_node_id && n.worker_id)
+      ? `cw:${n.cluster_node_id}:${n.worker_id}`
+      : `url:${n.url}`;
     if (!dedup.has(key)) dedup.set(key, n);
   }
 
@@ -1185,39 +1148,17 @@ async function discoverSeeds(){
   STATE.seeds = unique;
   STATE.connectedSeeds = unique.slice(0, MAX_CONNECTED_SEEDS);
 
-  // keep all connected seeds in discovered cache so they can be gossiped out
   for (const s of STATE.connectedSeeds) addDiscoveredSeedUrl(s.url);
 
   updateMiniStats();
-  if (STATE.connectedSeeds.length) setStatus("netStatus", `Connected to ${STATE.connectedSeeds.length} seed(s)`, "ok");
-  else setStatus("netStatus", "Disconnected", "warn");
+  setStatus("netStatus",
+    STATE.connectedSeeds.length ? `Connected to ${STATE.connectedSeeds.length} seed(s)` : "Disconnected",
+    STATE.connectedSeeds.length ? "ok" : "warn"
+  );
 }
-
-async function startSeedScanLoop(){
-  if (STATE.tokenScan.running) return;
-  STATE.tokenScan.running = true;
-
-  (async () => {
-    while (STATE.tokenScan.running) {
-      try {
-        await discoverSeeds();
-
-        if (STATE.online) {
-          startAllPollLoops();
-          await sendHeartbeatAll();
-        }
-      } catch {
-        setStatus("netStatus", "Disconnected", "err");
-      }
-
-      await sleep(TOKEN_SCAN_BACKOFF_MS);
-    }
-  })();
-}
-function stopSeedScanLoop(){ STATE.tokenScan.running = false; }
 
 /* =========================================================
-   NETWORK / HEARTBEAT
+   SEED NETWORK HELPERS (failover + health)
 ========================================================= */
 async function postToSeed(seedUrl, path, body){
   return await fetchJson(noCacheUrl(seedUrl.replace(/\/+$/,"") + path), {
@@ -1230,69 +1171,121 @@ async function getFromSeed(seedUrl, path){
   return await fetchJson(noCacheUrl(seedUrl.replace(/\/+$/,"") + path));
 }
 
-/* UPGRADED: send known_nodes hints to server */
-async function sendHeartbeatToSeed(seed){
-  const known_nodes = Array.from(STATE.discoveredNodeUrls)
-    .slice(0, 50)
-    .map(url => ({ url }));
+function seedCandidates(preferred){
+  const out = [];
+  if (preferred) {
+    const p = STATE.connectedSeeds.find(s => s.url === preferred);
+    if (p) out.push(p.url);
+  }
+  for (const s of STATE.connectedSeeds){
+    if (!out.includes(s.url)) out.push(s.url);
+  }
+  return out;
+}
 
+async function requestWithFailover(method, path, body, preferredSeedUrl){
+  const candidates = seedCandidates(preferredSeedUrl);
+  let lastErr = null;
+  for (const url of candidates){
+    try {
+      if (method === "GET") return { seedUrl:url, data: await getFromSeed(url, path) };
+      return { seedUrl:url, data: await postToSeed(url, path, body) };
+    } catch (e) { lastErr = e; }
+  }
+  throw lastErr || new Error("No reachable seeds");
+}
+
+/* =========================================================
+   HEARTBEAT / PEERS LIST
+========================================================= */
+async function sendHeartbeatToSeed(seed){
+  const known_nodes = Array.from(STATE.discoveredNodeUrls).slice(0, 80).map(url => ({ url }));
   return await postToSeed(seed.url, "/api/peer/heartbeat", {
-    peer_id: STATE.peerId,
-    display_name: STATE.identity || STATE.peerId,
-    signaling_url: "",
+    peer_uid: STATE.peerUid,
+    peer_name: STATE.peerName,
     capabilities: {
-      webrtc: true,
-      audio: true,
-      video: true,
-      chat: true,
-      file_transfer: true,
-      datachannel: true
+      webrtc: true, audio: true, video: true, chat: true, file_transfer: true, datachannel: true
     },
     known_nodes
   });
 }
 
-/* UPGRADED: merge known_nodes returned by server */
+function mergePeersFromSeed(seedUrl, peersArr){
+  if (!Array.isArray(peersArr)) return;
+  for (const p of peersArr){
+    const pk = String(p?.peer_key || "").trim();
+    const nm = String(p?.name || "").trim() || "Unknown";
+    if (!pk || pk === STATE.myPeerKey) continue;
+
+    const cur = STATE.peersByKey.get(pk);
+    const merged = {
+      peer_key: pk,
+      name: nm,
+      capabilities: p?.capabilities || {},
+      home_node_url: String(p?.home_node_url || "").trim(),
+      signaling_via_node: p?.signaling_via_node !== false,
+      last_seen_ts: Number(p?.last_seen_ts || 0),
+      sourceSeedUrl: seedUrl
+    };
+
+    if (!cur) STATE.peersByKey.set(pk, merged);
+    else {
+      // prefer fresher & keep best known home url
+      const better = (merged.last_seen_ts || 0) >= (cur.last_seen_ts || 0);
+      STATE.peersByKey.set(pk, {
+        ...cur,
+        ...merged,
+        name: better ? merged.name : cur.name,
+        home_node_url: merged.home_node_url || cur.home_node_url
+      });
+    }
+  }
+}
+
 async function sendHeartbeatAll(){
   if (!STATE.online || !STATE.connectedSeeds.length) return;
 
   const nextConnected = [];
-  const merged = new Map();
+  const nextPeers = new Map();
+
+  // local merge buffer
+  const tmpPeers = new Map();
 
   await Promise.all(STATE.connectedSeeds.map(async (seed) => {
     try {
       const j = await sendHeartbeatToSeed(seed);
       nextConnected.push(seed);
 
-      // learn new node URLs from cluster-aware servers
+      // update "myPeerKey"
+      if (j?.you?.peer_key) STATE.myPeerKey = String(j.you.peer_key);
+
       mergeKnownNodesIntoSeeds(j?.known_nodes || []);
 
       const peers = Array.isArray(j?.peers) ? j.peers : [];
-      for (const p of peers) {
-        if (!p || p.peer_id === STATE.peerId) continue;
-
-        const existing = merged.get(p.peer_id);
-        if (!existing) {
-          merged.set(p.peer_id, {
-            peer_id: p.peer_id,
-            display_name: p.display_name || p.peer_id,
-            online: p.online !== false,
-            seed_urls: [seed.url],
-            seeds_count: 1,
-            last_seen: Date.now(),
-            signaling_via_node: p.signaling_via_node !== false
-          });
-        } else {
-          existing.seed_urls = Array.from(new Set([...(existing.seed_urls || []), seed.url]));
-          existing.seeds_count = existing.seed_urls.length;
-          if (!existing.display_name && p.display_name) existing.display_name = p.display_name;
-          existing.online = existing.online || (p.online !== false);
-          existing.last_seen = Date.now();
-          if (typeof p.signaling_via_node !== "undefined") {
-            existing.signaling_via_node = existing.signaling_via_node || (p.signaling_via_node !== false);
-          }
-        }
+      // temp map merge
+      for (const p of peers){
+        const pk = String(p?.peer_key || "").trim();
+        if (!pk || pk === STATE.myPeerKey) continue;
+        const cur = tmpPeers.get(pk);
+        const cand = {
+          peer_key: pk,
+          name: String(p?.name || "").trim() || "Unknown",
+          capabilities: p?.capabilities || {},
+          home_node_url: String(p?.home_node_url || "").trim(),
+          signaling_via_node: p?.signaling_via_node !== false,
+          last_seen_ts: Number(p?.last_seen_ts || 0),
+          sourceSeedUrl: seed.url
+        };
+        if (!cur) tmpPeers.set(pk, cand);
+        else tmpPeers.set(pk, {
+          ...cur,
+          ...cand,
+          name: (cand.last_seen_ts >= cur.last_seen_ts) ? cand.name : cur.name,
+          home_node_url: cand.home_node_url || cur.home_node_url,
+          last_seen_ts: Math.max(cur.last_seen_ts||0, cand.last_seen_ts||0)
+        });
       }
+
     } catch {}
   }));
 
@@ -1304,14 +1297,20 @@ async function sendHeartbeatAll(){
   STATE.connectedSeeds = nextConnected;
   for (const s of nextConnected) addDiscoveredSeedUrl(s.url);
 
-  STATE.peersById = merged;
+  // keep selection if still exists
+  const oldSel = STATE.selectedPeerKey;
+  STATE.peersByKey = tmpPeers;
+  if (oldSel && !STATE.peersByKey.has(oldSel)) STATE.selectedPeerKey = "";
+
   updateMiniStats();
   renderPeers();
+  updateHeaderPills();
 
-  const loopUrls = new Set([...STATE.seedPollLoops.keys()]);
-  const seedUrls = new Set(STATE.connectedSeeds.map(n => n.url));
-  const loopsMismatch = loopUrls.size !== seedUrls.size || [...loopUrls].some(u => !seedUrls.has(u));
-  if (loopsMismatch && STATE.online) startAllPollLoops();
+  // ensure event transports match current seeds
+  if (STATE.online) {
+    startAllStreams();   // SSE first
+    startAllPollLoops(); // poll fallback stays alive
+  }
 }
 
 async function startHeartbeatLoop(){
@@ -1324,24 +1323,58 @@ function stopHeartbeatLoop(){
   STATE.heartbeatTimer = null;
 }
 
+/* =========================================================
+   ICE CONFIG FETCH (server-provided STUN/TURN)
+========================================================= */
+async function refreshIceConfig(){
+  if (!STATE.connectedSeeds.length) return;
+  const best = STATE.connectedSeeds[0]?.url;
+  try {
+    const { data } = await requestWithFailover("GET", "/api/network/ice", null, best);
+    const servers = Array.isArray(data?.iceServers) ? data.iceServers : null;
+    if (servers && servers.length){
+      RTC_CONFIG = { iceServers: servers };
+    }
+  } catch {}
+}
+function startIceLoop(){
+  if (STATE.iceTickTimer) clearInterval(STATE.iceTickTimer);
+  refreshIceConfig();
+  STATE.iceTickTimer = setInterval(refreshIceConfig, 20000);
+}
+function stopIceLoop(){
+  if (STATE.iceTickTimer) clearInterval(STATE.iceTickTimer);
+  STATE.iceTickTimer = null;
+}
+
+/* =========================================================
+   ONLINE / OFFLINE
+========================================================= */
 async function autoLogin(force=false){
   try {
     ensureIdentity();
+
     if (!STATE.connectedSeeds.length || force) {
       await discoverSeeds();
     }
 
     STATE.online = true;
     saveStoredIdentity();
+
     await startHeartbeatLoop();
+    startIceLoop();
+
+    startAllStreams();
     startAllPollLoops();
 
-    setStatus("idStatus", `Online as ${STATE.identity}`, "ok");
-    if (STATE.connectedSeeds.length) setStatus("netStatus", `Connected to ${STATE.connectedSeeds.length} seed(s)`, "ok");
-    else setStatus("netStatus", "Disconnected", "warn");
+    setStatus("idStatus", `Online as ${STATE.peerName}`, "ok");
+    setStatus("netStatus",
+      STATE.connectedSeeds.length ? `Connected to ${STATE.connectedSeeds.length} seed(s)` : "Disconnected",
+      STATE.connectedSeeds.length ? "ok" : "warn"
+    );
 
     updateHeaderPills();
-    addSystemMessage(`You are online as ${STATE.peerId}(${STATE.identity})`);
+    addSystemMessage(`Online as ${STATE.peerName} (private uid hidden)`);
   } catch {
     STATE.online = false;
     setStatus("idStatus", "Offline", "err");
@@ -1350,11 +1383,15 @@ async function autoLogin(force=false){
 
 async function logoutAll(){
   STATE.online = false;
+
   stopHeartbeatLoop();
+  stopIceLoop();
+
+  stopAllStreams();
   stopAllPollLoops();
 
-  STATE.peersById = new Map();
-  STATE.selectedPeer = "";
+  STATE.peersByKey = new Map();
+  STATE.selectedPeerKey = "";
   renderPeers();
   updateMiniStats();
 
@@ -1366,16 +1403,13 @@ async function logoutAll(){
 }
 
 /* =========================================================
-   PEERS UI
+   PEERS UI (show name, hide uid; peer_key is internal)
 ========================================================= */
 function renderPeers(){
   const q = ($("peerSearch").value || "").trim().toLowerCase();
-  const arr = Array.from(STATE.peersById.values())
-    .filter(p => {
-      if (!q) return true;
-      return (p.peer_id || "").toLowerCase().includes(q) || (p.display_name || "").toLowerCase().includes(q);
-    })
-    .sort((a,b) => (a.display_name || a.peer_id).localeCompare(b.display_name || b.peer_id));
+  const arr = Array.from(STATE.peersByKey.values())
+    .filter(p => !q || (p.name||"").toLowerCase().includes(q) || (p.peer_key||"").toLowerCase().includes(q))
+    .sort((a,b) => (a.name||"").localeCompare(b.name||""));
 
   const el = $("peerList");
   if (!arr.length){
@@ -1387,19 +1421,23 @@ function renderPeers(){
   el.innerHTML = "";
   for (const p of arr) {
     const d = document.createElement("div");
-    d.className = "peer" + (STATE.selectedPeer === p.peer_id ? " active" : "");
+    d.className = "peer" + (STATE.selectedPeerKey === p.peer_key ? " active" : "");
     d.onclick = () => {
-      STATE.selectedPeer = p.peer_id;
+      STATE.selectedPeerKey = p.peer_key;
       renderPeers();
       updateHeaderPills();
-      addSystemMessage(`Selected peer ${p.peer_id}(${p.display_name || p.peer_id})`);
+      addSystemMessage(`Selected peer ${p.name}`);
     };
+
+    const via = p.signaling_via_node ? "direct seed" : "shadow (bridge)";
+    const home = p.home_node_url ? p.home_node_url.replace(/^https?:\/\//,"").slice(0,34) : "unknown";
+
     d.innerHTML = `
       <div style="min-width:0">
-        <div class="name">${escapeHtml(p.peer_id)} <span style="color:#94a3b8;font-weight:500">(${escapeHtml(p.display_name || p.peer_id)})</span></div>
-        <div class="sub">${p.seeds_count || 1} seed(s)</div>
+        <div class="name">${escapeHtml(p.name)}</div>
+        <div class="sub">${escapeHtml(via)} • ${escapeHtml(home)} • key:${escapeHtml(p.peer_key.slice(0,6))}…</div>
       </div>
-      <span class="badge">${p.online ? "online" : "offline"}</span>
+      <span class="badge">visible</span>
     `;
     el.appendChild(d);
   }
@@ -1413,8 +1451,51 @@ async function refreshPeersNow(){
 }
 
 /* =========================================================
-   POLLING / SIGNALING
+   EVENT TRANSPORTS: SSE first, poll always available
+   - We can open SSE to ALL seeds and dedup by event_id.
 ========================================================= */
+function startAllStreams(){
+  stopAllStreams();
+  for (const seed of STATE.connectedSeeds){
+    startSeedStream(seed.url);
+  }
+}
+function stopAllStreams(){
+  for (const [seedUrl, es] of STATE.seedStreams.entries()){
+    try { es.close(); } catch {}
+  }
+  STATE.seedStreams.clear();
+}
+
+function startSeedStream(seedUrl){
+  if (STATE.seedStreams.has(seedUrl)) return;
+  const url = seedUrl.replace(/\/+$/,"") + `/api/peer/stream?peer_uid=${encodeURIComponent(STATE.peerUid)}`;
+  try{
+    const es = new EventSource(noCacheUrl(url));
+    STATE.seedStreams.set(seedUrl, es);
+
+    es.addEventListener("events", async (e) => {
+      try {
+        const j = JSON.parse(e.data || "{}");
+        const events = Array.isArray(j?.events) ? j.events : [];
+        for (const ev of events){
+          // Dedup across seeds/streams by server event_id
+          if (STATE.seenEventIds.has(ev?.event_id)) continue;
+          STATE.seenEventIds.add(ev?.event_id);
+          ev.__seed_url = seedUrl;
+          await handleEvent(ev);
+        }
+      } catch {}
+    });
+
+    es.addEventListener("ping", () => {});
+    es.onerror = () => {
+      // keep poll loop as fallback; SSE may recover
+    };
+  } catch {}
+}
+
+/* Poll fallback loops */
 function startAllPollLoops(){
   stopAllPollLoops();
   for (const seed of STATE.connectedSeeds) startSeedPollLoop(seed.url);
@@ -1432,9 +1513,11 @@ function startSeedPollLoop(seedUrl){
     while (ctrl.running) {
       if (!STATE.online) { await sleep(500); continue; }
       try {
-        const j = await getFromSeed(seedUrl, `/api/peer/poll?peer_id=${encodeURIComponent(STATE.peerId)}&timeout=20`);
+        const j = await getFromSeed(seedUrl, `/api/peer/poll?peer_uid=${encodeURIComponent(STATE.peerUid)}&timeout=20`);
         const events = Array.isArray(j?.events) ? j.events : [];
         for (const ev of events) {
+          if (STATE.seenEventIds.has(ev?.event_id)) continue;
+          STATE.seenEventIds.add(ev?.event_id);
           ev.__seed_url = seedUrl;
           await handleEvent(ev);
         }
@@ -1445,41 +1528,18 @@ function startSeedPollLoop(seedUrl){
   })();
 }
 
-async function signalSeedRequest(path, body, preferredSeedUrl){
-  const candidates = [];
-  if (preferredSeedUrl) {
-    const p = STATE.connectedSeeds.find(n => n.url === preferredSeedUrl);
-    if (p) candidates.push(p);
-  }
-  for (const n of STATE.connectedSeeds) {
-    if (!candidates.find(x => x.url === n.url)) candidates.push(n);
-  }
-
-  let lastErr = null;
-  for (const n of candidates) {
-    try {
-      const data = await postToSeed(n.url, path, body);
-      return { seedUrl:n.url, data };
-    } catch (e) { lastErr = e; }
-  }
-  throw lastErr || new Error("No connection");
-}
-
 /* =========================================================
-   CALL / CONNECT ACTIONS
+   CALL / CONNECT ACTIONS (v3 backend: invite uses peer_key)
 ========================================================= */
-async function connectSelectedData(){
-  await dialPeer("data");
-}
-async function dialSelectedMedia(){
-  await dialPeer("media");
-}
+async function connectSelectedData(){ await dialPeer("data"); }
+async function dialSelectedMedia(){ await dialPeer("media"); }
 
 async function dialPeer(mode){
   try {
     if (!STATE.online) throw new Error("offline");
-    if (!STATE.selectedPeer) throw new Error("select");
-    if (STATE.selectedPeer === STATE.peerId) throw new Error("self");
+    if (!STATE.selectedPeerKey) throw new Error("select");
+    if (!STATE.myPeerKey) throw new Error("no key yet");
+    if (STATE.selectedPeerKey === STATE.myPeerKey) throw new Error("self");
     if (STATE.activeCallId) throw new Error("busy");
     if (!STATE.connectedSeeds.length) throw new Error("no seeds");
 
@@ -1487,20 +1547,24 @@ async function dialPeer(mode){
 
     STATE.outgoingRequestedMode = mode;
 
-    const r = await signalSeedRequest("/api/peer/invite", {
-      caller: STATE.peerId,
-      callee: STATE.selectedPeer,
-      session_kind: mode // harmless if server ignores
-    });
+    // Prefer the peer's home seed/node if known, else best seed
+    const targetPeer = STATE.peersByKey.get(STATE.selectedPeerKey);
+    const preferred = targetPeer?.home_node_url || STATE.connectedSeeds[0]?.url;
+
+    const r = await requestWithFailover("POST", "/api/peer/invite", {
+      caller_key: STATE.myPeerKey,
+      callee_key: STATE.selectedPeerKey,
+      session_kind: mode
+    }, preferred);
 
     STATE.activeSeedUrl = r.seedUrl;
-    STATE.activeCallId = r.data?.call_id || r.data?.call?.id || "";
-    STATE.activePeer = STATE.selectedPeer;
+    STATE.activeCallId = r.data?.call_id || "";
+    STATE.activePeerKey = STATE.selectedPeerKey;
     STATE.sessionMode = "connecting";
     updateHeaderPills();
 
     setStatus("idStatus", mode === "media" ? "Calling…" : "Connecting…", "ok");
-    addSystemMessage(`${mode === "media" ? "Calling" : "Connecting to"} ${STATE.selectedPeer}`);
+    addSystemMessage(`${mode === "media" ? "Calling" : "Connecting to"} ${(targetPeer?.name || "peer")}`);
   } catch {
     setStatus("idStatus", "Could not connect", "err");
   }
@@ -1515,13 +1579,13 @@ async function acceptIncoming(mode="data"){
     const seedUrl = ev.__seed_url || STATE.connectedSeeds[0]?.url;
 
     await postToSeed(seedUrl, "/api/peer/respond", {
-      peer_id: STATE.peerId,
+      peer_uid: STATE.peerUid,
       call_id: ev.call_id,
       action: "accept"
     });
 
     STATE.activeCallId = ev.call_id;
-    STATE.activePeer = ev.from;
+    STATE.activePeerKey = ev.from;
     STATE.activeSeedUrl = seedUrl;
     STATE.sessionMode = mode;
     updateHeaderPills();
@@ -1531,7 +1595,7 @@ async function acceptIncoming(mode="data"){
     renderIncomingBar();
 
     setStatus("idStatus", mode === "media" ? "Call accepted" : "Chat connected", "ok");
-    addSystemMessage(`${mode === "media" ? "Call" : "Chat"} accepted with ${ev.from}`);
+    addSystemMessage(`${mode === "media" ? "Call" : "Chat"} accepted`);
   } catch {
     setStatus("idStatus", "Could not accept", "err");
   }
@@ -1544,12 +1608,12 @@ async function rejectIncoming(){
     const seedUrl = ev.__seed_url || STATE.connectedSeeds[0]?.url;
 
     await postToSeed(seedUrl, "/api/peer/respond", {
-      peer_id: STATE.peerId,
+      peer_uid: STATE.peerUid,
       call_id: ev.call_id,
       action: "reject"
     });
 
-    addSystemMessage(`Rejected request from ${ev.from}`);
+    addSystemMessage(`Rejected request`);
     STATE.incomingCall = null;
     renderIncomingBar();
     setStatus("idStatus", "Request rejected", "warn");
@@ -1567,11 +1631,11 @@ async function hangup(){
 
     try {
       if (STATE.activeCallId) {
-        await signalSeedRequest("/api/peer/hangup", {
-          peer_id: STATE.peerId,
+        await requestWithFailover("POST", "/api/peer/hangup", {
+          peer_uid: STATE.peerUid,
           call_id: STATE.activeCallId,
           reason: "user_hangup"
-        }, STATE.activeSeedUrl);
+        }, STATE.activeSeedUrl || STATE.connectedSeeds[0]?.url);
       }
     } catch {}
 
@@ -1586,24 +1650,25 @@ async function hangup(){
 
 function renderIncomingBar(){
   const bar = $("incomingBar");
-  if (!STATE.incomingCall){
-    bar.classList.remove("show");
-    return;
-  }
-  const from = STATE.incomingCall.from;
-  $("incomingText").textContent = `Incoming request from ${from}`;
+  if (!STATE.incomingCall){ bar.classList.remove("show"); return; }
+  const fromKey = STATE.incomingCall.from;
+  const peer = STATE.peersByKey.get(fromKey);
+  $("incomingText").textContent = `Incoming request from ${peer?.name || "peer"}`;
   bar.classList.add("show");
 }
 
 async function sendSignal(callId, signalType, payload){
-  await signalSeedRequest("/api/peer/signal", {
-    peer_id: STATE.peerId,
+  await requestWithFailover("POST", "/api/peer/signal", {
+    peer_uid: STATE.peerUid,
     call_id: callId,
     signal_type: signalType,
     payload
-  }, STATE.activeSeedUrl);
+  }, STATE.activeSeedUrl || STATE.connectedSeeds[0]?.url);
 }
 
+/* =========================================================
+   EVENT HANDLING (server events)
+========================================================= */
 async function handleEvent(ev){
   const t = ev.type;
 
@@ -1611,13 +1676,15 @@ async function handleEvent(ev){
     STATE.incomingCall = ev;
     renderIncomingBar();
     setStatus("idStatus", "Incoming request", "warn");
-    addSystemMessage(`Incoming request from ${ev.from}`);
+
+    const peer = STATE.peersByKey.get(ev.from);
+    addSystemMessage(`Incoming request from ${peer?.name || "peer"}`);
     return;
   }
 
   if (t === "call_outgoing") {
     STATE.activeCallId = ev.call_id;
-    STATE.activePeer = ev.to;
+    STATE.activePeerKey = ev.to;
     STATE.activeSeedUrl = ev.__seed_url || STATE.activeSeedUrl;
     STATE.sessionMode = "connecting";
     updateHeaderPills();
@@ -1632,7 +1699,7 @@ async function handleEvent(ev){
       updateHeaderPills();
       setStatus("idStatus", mode === "media" ? "Connecting call…" : "Connecting chat…", "ok");
 
-      if (!STATE.pc) await createPc(false, ev.call_id, ev.from, mode);
+      if (!STATE.pc) await createPc(false, ev.call_id, STATE.activePeerKey, mode);
       const pc = STATE.pc;
 
       STATE.makingOffer = true;
@@ -1687,19 +1754,12 @@ async function handleEvent(ev){
    MEDIA / WEBRTC / DATA CHANNELS
 ========================================================= */
 async function enableMedia(){
-  try {
-    await ensureMedia();
-    setStatus("idStatus", "Camera ready", "ok");
-  } catch {
-    setStatus("idStatus", "Camera unavailable", "err");
-  }
+  try { await ensureMedia(); setStatus("idStatus", "Camera ready", "ok"); }
+  catch { setStatus("idStatus", "Camera unavailable", "err"); }
 }
 
 async function ensureMedia(){
-  if (STATE.localStream) {
-    updateVideoHints();
-    return STATE.localStream;
-  }
+  if (STATE.localStream) { updateVideoHints(); return STATE.localStream; }
   if (!navigator.mediaDevices?.getUserMedia) throw new Error("unsupported");
 
   const stream = await navigator.mediaDevices.getUserMedia({
@@ -1714,7 +1774,7 @@ async function ensureMedia(){
   return stream;
 }
 
-async function createPc(polite, callId, peerId, mode="data"){
+async function createPc(polite, callId, peerKey, mode="data"){
   if (STATE.pc) return STATE.pc;
 
   STATE.polite = !!polite;
@@ -1744,22 +1804,13 @@ async function createPc(polite, callId, peerId, mode="data"){
   }
 
   pc.ondatachannel = (e) => {
-    if (e.channel.label === "chat") {
-      STATE.chatDc = e.channel;
-      wireChatChannel(STATE.chatDc);
-    } else if (e.channel.label === "file") {
-      STATE.fileDc = e.channel;
-      wireFileChannel(STATE.fileDc);
-    }
+    if (e.channel.label === "chat") { STATE.chatDc = e.channel; wireChatChannel(STATE.chatDc); }
+    else if (e.channel.label === "file") { STATE.fileDc = e.channel; wireFileChannel(STATE.fileDc); }
   };
 
   pc.ontrack = async (e) => {
-    if (e.streams && e.streams[0]) {
-      $("remoteVideo").srcObject = e.streams[0];
-    } else if (STATE.remoteStream) {
-      STATE.remoteStream.addTrack(e.track);
-      $("remoteVideo").srcObject = STATE.remoteStream;
-    }
+    if (e.streams && e.streams[0]) $("remoteVideo").srcObject = e.streams[0];
+    else if (STATE.remoteStream) { STATE.remoteStream.addTrack(e.track); $("remoteVideo").srcObject = STATE.remoteStream; }
     updateVideoHints();
     await safePlay($("remoteVideo"));
   };
@@ -1791,112 +1842,54 @@ async function createPc(polite, callId, peerId, mode="data"){
     }
   };
 
-  pc.oniceconnectionstatechange = () => {};
   return pc;
 }
 
+/* =========================================================
+   CHAT CHANNEL + ACK + DEDUP
+========================================================= */
 function wireChatChannel(dc){
-  dc.onopen = () => {
-    addSystemMessage("Chat channel ready");
-  };
-  dc.onclose = () => {
-    addSystemMessage("Chat channel closed");
-  };
+  dc.onopen = () => addSystemMessage("Chat channel ready");
+  dc.onclose = () => addSystemMessage("Chat channel closed");
   dc.onerror = () => {};
 
   dc.onmessage = (e) => {
     try {
       const j = JSON.parse(e.data);
+
+      // Chat ACK
+      if (j?.type === "chat-ack" && j?.msg_id){
+        const item = findChatEntryById(j.msg_id);
+        if (item && item.kind === "chat" && item.role === "me"){
+          item.ack = "delivered";
+          renderChatHistory();
+        }
+        return;
+      }
+
       if (j?.type === "chat") {
-        const peer = STATE.peersById.get(STATE.activePeer) || { peer_id: STATE.activePeer, display_name: STATE.activePeer };
+        const msgId = String(j.msg_id || "");
+        if (msgId && STATE.seenMsgIds.has(msgId)) return;
+        if (msgId) STATE.seenMsgIds.add(msgId);
+
+        const peer = STATE.peersByKey.get(STATE.activePeerKey) || { peer_key: STATE.activePeerKey, name: "Peer" };
+
         addChatEntry({
-          id: `m-${Date.now()}-${Math.random().toString(36).slice(2,8)}`,
+          id: msgId || `m-${Date.now()}-${Math.random().toString(36).slice(2,8)}`,
           kind: "chat",
           role: "peer",
           peer,
-          who: `${peer.peer_id}(${peer.display_name || peer.peer_id})`,
+          who: peer.name,
           text: j.text || "",
           ts: Number(j.ts) || Date.now()
         });
+
+        // send delivery ACK back
+        if (msgId){
+          try { dc.send(JSON.stringify({ type:"chat-ack", msg_id: msgId, ts: Date.now() })); } catch {}
+        }
       }
     } catch {}
-  };
-}
-
-function wireFileChannel(dc){
-  dc.binaryType = "arraybuffer";
-  dc.onopen = () => addSystemMessage("File sharing ready");
-  dc.onclose = () => {};
-  dc.onerror = () => {};
-
-  dc.onmessage = async (e) => {
-    if (typeof e.data === "string") {
-      let j;
-      try { j = JSON.parse(e.data); } catch { return; }
-
-      if (j.type === "file-meta") {
-        const msgId = `f-${Date.now()}-${Math.random().toString(36).slice(2,8)}`;
-        STATE.fileRecv[j.transfer_id] = {
-          meta: j,
-          chunks: [],
-          bytesReceived: 0,
-          msgId
-        };
-
-        const peer = STATE.peersById.get(STATE.activePeer) || { peer_id: STATE.activePeer, display_name: STATE.activePeer };
-        addChatEntry({
-          id: msgId,
-          kind: "file",
-          role: "peer",
-          peer,
-          who: `${peer.peer_id}(${peer.display_name || peer.peer_id})`,
-          ts: Date.now(),
-          file: {
-            name: j.name,
-            size: j.size,
-            mime: j.mime || "application/octet-stream",
-            state: "receiving…",
-            kept: true,
-            blob: null,
-            blobUrl: null
-          }
-        });
-        return;
-      }
-
-      if (j.type === "file-end") {
-        const rec = STATE.fileRecv[j.transfer_id];
-        if (!rec) return;
-        const blob = new Blob(rec.chunks, { type: rec.meta.mime || "application/octet-stream" });
-
-        const item = findChatEntryById(rec.msgId);
-        if (item?.file) {
-          item.file.blob = blob;
-          item.file.state = "received";
-        }
-        delete STATE.fileRecv[j.transfer_id];
-        renderChatHistory();
-        return;
-      }
-
-      return;
-    }
-
-    // binary chunk
-    const activeTransfers = Object.values(STATE.fileRecv);
-    if (!activeTransfers.length) return;
-    const rec = activeTransfers[activeTransfers.length - 1];
-
-    rec.chunks.push(e.data);
-    rec.bytesReceived += (e.data.byteLength || 0);
-
-    const item = findChatEntryById(rec.msgId);
-    if (item?.file && rec.meta?.size) {
-      const pct = Math.min(100, Math.floor((rec.bytesReceived / rec.meta.size) * 100));
-      item.file.state = `receiving… ${pct}%`;
-      if (pct === 100) item.file.state = "processing…";
-      renderChatHistory();
-    }
   };
 }
 
@@ -1910,22 +1903,122 @@ function sendChat(){
   }
 
   try {
-    const payload = { type:"chat", text:txt, ts:Date.now() };
+    const msgId = `m-${Date.now()}-${Math.random().toString(36).slice(2,10)}`;
+    const payload = { type:"chat", msg_id: msgId, text:txt, ts:Date.now() };
     STATE.chatDc.send(JSON.stringify(payload));
 
     addChatEntry({
-      id: `m-${Date.now()}-${Math.random().toString(36).slice(2,8)}`,
+      id: msgId,
       kind: "chat",
       role: "me",
-      who: `${STATE.peerId}(${STATE.identity || STATE.peerId})`,
+      who: STATE.peerName,
       text: txt,
-      ts: payload.ts
+      ts: payload.ts,
+      ack: "sending…"
     });
 
     $("chatText").value = "";
   } catch {
     setStatus("idStatus", "Could not send message", "err");
   }
+}
+
+/* =========================================================
+   FILE CHANNEL + ACK + DEDUP
+========================================================= */
+function wireFileChannel(dc){
+  dc.binaryType = "arraybuffer";
+  dc.onopen = () => addSystemMessage("File sharing ready");
+  dc.onclose = () => {};
+  dc.onerror = () => {};
+
+  dc.onmessage = async (e) => {
+    if (typeof e.data === "string") {
+      let j;
+      try { j = JSON.parse(e.data); } catch { return; }
+
+      // Sender receives ACK
+      if (j?.type === "file-ack" && j?.transfer_id){
+        const item = findChatEntryById(j.transfer_id);
+        if (item?.file) { item.file.state = "delivered"; renderChatHistory(); }
+        return;
+      }
+
+      // Receiver meta
+      if (j.type === "file-meta") {
+        const tid = String(j.transfer_id || "");
+        if (!tid) return;
+
+        // Dedup transfers (important if reconnection or duplicate control messages)
+        if (STATE.seenTransferIds.has(tid)) return;
+        STATE.seenTransferIds.add(tid);
+
+        // Use transfer_id as message id so ACKs can match reliably
+        const msgId = tid;
+
+        STATE.fileRecv[tid] = { meta: j, chunks: [], bytesReceived: 0, msgId };
+
+        const peer = STATE.peersByKey.get(STATE.activePeerKey) || { peer_key: STATE.activePeerKey, name: "Peer" };
+        addChatEntry({
+          id: msgId,
+          kind: "file",
+          role: "peer",
+          peer,
+          who: peer.name,
+          ts: Date.now(),
+          file: {
+            name: j.name,
+            size: j.size,
+            mime: j.mime || "application/octet-stream",
+            state: "receiving…",
+            blob: null
+          }
+        });
+        return;
+      }
+
+      // Receiver end
+      if (j.type === "file-end") {
+        const tid = String(j.transfer_id || "");
+        const rec = STATE.fileRecv[tid];
+        if (!rec) return;
+
+        const blob = new Blob(rec.chunks, { type: rec.meta.mime || "application/octet-stream" });
+
+        const item = findChatEntryById(rec.msgId);
+        if (item?.file) {
+          item.file.blob = blob;
+          item.file.state = "received";
+        }
+
+        delete STATE.fileRecv[tid];
+        renderChatHistory();
+
+        // send ACK back to sender
+        try { dc.send(JSON.stringify({ type:"file-ack", transfer_id: tid, ts: Date.now() })); } catch {}
+        return;
+      }
+
+      return;
+    }
+
+    // binary chunk
+    const activeTransfers = Object.values(STATE.fileRecv);
+    if (!activeTransfers.length) return;
+
+    // newest active
+    const rec = activeTransfers[activeTransfers.length - 1];
+    rec.chunks.push(e.data);
+    rec.bytesReceived += (e.data.byteLength || 0);
+
+    const item = findChatEntryById(rec.msgId);
+    if (item?.file && rec.meta?.size) {
+      const pct = Math.min(100, Math.floor((rec.bytesReceived / rec.meta.size) * 100));
+      item.file.state = `receiving… ${pct}%`;
+      if (pct === 100) item.file.state = "processing…";
+      renderChatHistory();
+    }
+  };
 }
 
 async function sendSelectedFile(){
@@ -1936,24 +2029,22 @@ async function sendSelectedFile(){
     if (STATE.fileSendBusy) throw new Error("Busy");
 
     STATE.fileSendBusy = true;
-    const transferId = `${Date.now()}-${Math.random().toString(36).slice(2,8)}`;
-    const msgId = `f-${Date.now()}-${Math.random().toString(36).slice(2,8)}`;
+
+    const transferId = `t-${Date.now()}-${Math.random().toString(36).slice(2,10)}`;
     const CHUNK = 16 * 1024;
 
     addChatEntry({
-      id: msgId,
+      id: transferId,
       kind: "file",
       role: "me",
-      who: `${STATE.peerId}(${STATE.identity || STATE.peerId})`,
+      who: STATE.peerName,
       ts: Date.now(),
       file: {
         name: f.name,
         size: f.size,
         mime: f.type || "application/octet-stream",
         state: "sending… 0%",
-        kept: true,
-        blob: f,
-        blobUrl: null
+        blob: f
       }
     });
 
@@ -1974,20 +2065,14 @@ async function sendSelectedFile(){
       offset += chunk.byteLength;
 
       const pct = Math.min(100, Math.floor((offset / f.size) * 100));
-      const item = findChatEntryById(msgId);
-      if (item?.file) {
-        item.file.state = `sending… ${pct}%`;
-        renderChatHistory();
-      }
+      const item = findChatEntryById(transferId);
+      if (item?.file) { item.file.state = `sending… ${pct}%`; renderChatHistory(); }
     }
 
     STATE.fileDc.send(JSON.stringify({ type:"file-end", transfer_id: transferId }));
 
-    const item = findChatEntryById(msgId);
-    if (item?.file) {
-      item.file.state = "sent";
-      renderChatHistory();
-    }
+    const item = findChatEntryById(transferId);
+    if (item?.file) { item.file.state = "sent (awaiting ack…)"; renderChatHistory(); }
 
     $("fileInput").value = "";
   } catch {
@@ -1997,14 +2082,20 @@ async function sendSelectedFile(){
   }
 }
 
+/* =========================================================
+   SIGNAL HANDLING
+========================================================= */
 async function handleSignal(ev){
-  const { call_id, signal_type, payload, from } = ev;
+  const { call_id, signal_type, payload } = ev;
 
   if (!STATE.pc) {
     const activeMatch = STATE.activeCallId && STATE.activeCallId === call_id;
     if (!activeMatch) return;
-    // If we don't know, assume data session until tracks appear
-    await createPc(false, call_id, from, STATE.sessionMode === "connecting" ? (STATE.outgoingRequestedMode || "data") : (STATE.sessionMode || "data"));
+    const mode =
+      (STATE.sessionMode === "connecting")
+        ? (STATE.outgoingRequestedMode || "data")
+        : (STATE.sessionMode || "data");
+    await createPc(false, call_id, STATE.activePeerKey, mode);
   }
 
   const pc = STATE.pc;
@@ -2031,9 +2122,8 @@ async function handleSignal(ev){
   }
 
   if (signal_type === "ice") {
-    if (!pc.remoteDescription) {
-      STATE.pendingIce.push(payload);
-    } else {
+    if (!pc.remoteDescription) STATE.pendingIce.push(payload);
+    else {
       try { await pc.addIceCandidate(new RTCIceCandidate(payload)); } catch {}
     }
   }
@@ -2075,7 +2165,7 @@ async function stopPc(resetCallState=true){
 
   if (resetCallState) {
     STATE.activeCallId = "";
-    STATE.activePeer = "";
+    STATE.activePeerKey = "";
     STATE.activeSeedUrl = "";
     STATE.incomingCall = null;
     STATE.sessionMode = "idle";
@@ -2094,12 +2184,14 @@ async function restartSessionAfterCallEnd(){
   try {
     STATE.online = false;
     stopHeartbeatLoop();
+    stopAllStreams();
     stopAllPollLoops();
     await sleep(250);
     STATE.online = true;
     await startHeartbeatLoop();
+    startAllStreams();
     startAllPollLoops();
-    setStatus("idStatus", `Online as ${STATE.identity}`, "ok");
+    setStatus("idStatus", `Online as ${STATE.peerName}`, "ok");
   } catch {
     setStatus("idStatus", "Disconnected", "err");
   }
@@ -2108,6 +2200,28 @@ async function restartSessionAfterCallEnd(){
 /* =========================================================
    BOOT
 ========================================================= */
+async function startSeedScanLoop(){
+  if (STATE.tokenScan.running) return;
+  STATE.tokenScan.running = true;
+
+  (async () => {
+    while (STATE.tokenScan.running) {
+      try {
+        await discoverSeeds();
+        if (STATE.online) {
+          startAllStreams();
+          startAllPollLoops();
+          await sendHeartbeatAll();
+        }
+      } catch {
+        setStatus("netStatus", "Disconnected", "err");
+      }
+      await sleep(TOKEN_SCAN_BACKOFF_MS);
+    }
+  })();
+}
+function stopSeedScanLoop(){ STATE.tokenScan.running = false; }
+
 async function boot(){
   const continueBoot = await clearCachesOnceAndReload();
   if (!continueBoot) return;
@@ -2117,12 +2231,9 @@ async function boot(){
   renderChatHistory();
   updateVideoHints();
 
-  if (!window.isSecureContext) {
-    setStatus("idStatus", "Use HTTPS for camera", "warn");
-  }
+  if (!window.isSecureContext) setStatus("idStatus", "Use HTTPS for camera", "warn");
 
   startSeedScanLoop();
-
   try { await discoverSeeds(); } catch {}
 
   await autoLogin(false);
@@ -2135,6 +2246,7 @@ async function boot(){
       const after = new Set(STATE.connectedSeeds.map(n => n.url));
       const changed = before.size !== after.size || [...before].some(u => !after.has(u));
       if (changed && STATE.online) {
+        startAllStreams();
         startAllPollLoops();
         await sendHeartbeatAll();
       }
@@ -2144,12 +2256,12 @@ async function boot(){
   $("chatText").addEventListener("keydown", (e) => {
     if (e.key === "Enter") sendChat();
   });
-
-  document.addEventListener("fullscreenchange", () => {});
 }
 
 window.addEventListener("beforeunload", () => {
   stopHeartbeatLoop();
+  stopIceLoop();
+  stopAllStreams();
   stopAllPollLoops();
   stopSeedScanLoop();
 });
