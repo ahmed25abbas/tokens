@@ -620,7 +620,7 @@
 const STARTUP_RELOAD_FLAG = "__p2p_peer_client_reloaded_once__";
 const HEARTBEAT_MS = 5000;
 const NETWORK_REFRESH_MS = 15000;
-const MAX_CONNECTED_SEEDS = 5;
+const MAX_CONNECTED_SEEDS = 8; // cluster-aware: allow more workers/seeds
 
 // Internal token/seed discovery (hidden from UI)
 const TOKEN_SCAN_MAX = 999;
@@ -641,6 +641,9 @@ const STATE = {
   connectedSeeds: [],
   seedPollLoops: new Map(),
 
+  // NEW: cluster discovery cache (learned from /api/peer/heartbeat known_nodes)
+  discoveredNodeUrls: new Set(),
+
   peerId: "",          // hidden numeric id for protocol
   identity: "",        // user-editable single visible identity (name)
   online: false,
@@ -651,7 +654,7 @@ const STATE = {
   activeCallId: "",
   activePeer: "",
   activeSeedUrl: "",
-  sessionMode: "idle", // idle | data | media
+  sessionMode: "idle", // idle | connecting | data | media
   outgoingRequestedMode: "data",
 
   heartbeatTimer: null,
@@ -1093,19 +1096,24 @@ async function fetchTokenUrlPuterOnly(owner, repo, branch, tokenName){
     previousValue: prevEffective || null
   };
 }
+
 async function helloSeed(url){
   const base = String(url || "").replace(/\/+$/,"");
   const t0 = performance.now();
   const j = await fetchJson(noCacheUrl(base + "/api/node/hello"));
   const latency = Math.round(performance.now() - t0);
+
+  // cluster node compatibility: prefer cluster_node_id + worker_id if present
   return {
     url: base,
     latency_ms: latency,
-    node_id: j?.node?.node_id || null,
+    node_id: j?.node?.cluster_node_id || j?.node?.node_id || null,
+    worker_id: j?.node?.worker_id || null,
     peers_online: j?.node?.peers_online ?? null,
     raw: j
   };
 }
+
 async function scanSeedsOnce(){
   const { owner, repo, branch } = REPO_CFG;
   const found = [];
@@ -1129,6 +1137,62 @@ async function scanSeedsOnce(){
   }
   return found;
 }
+
+/* =========================================================
+   CLUSTER DISCOVERY UPGRADE (known_nodes gossip from server)
+========================================================= */
+function addDiscoveredSeedUrl(url){
+  const u = String(url || "").trim().replace(/\/+$/,"");
+  if (!/^https?:\/\//i.test(u)) return;
+  STATE.discoveredNodeUrls.add(u);
+}
+
+function mergeKnownNodesIntoSeeds(knownNodes){
+  if (!Array.isArray(knownNodes)) return;
+  for (const n of knownNodes){
+    const u = String(n?.url || "").trim().replace(/\/+$/,"");
+    if (!/^https?:\/\//i.test(u)) continue;
+    addDiscoveredSeedUrl(u);
+  }
+}
+
+/* REPLACED discoverSeeds(): now merges token scan + learned known_nodes */
+async function discoverSeeds(){
+  const results = await scanSeedsOnce();
+
+  // learned direct node hints (from heartbeat known_nodes)
+  const hintedUrls = Array.from(STATE.discoveredNodeUrls);
+  const hintedHello = [];
+  for (const u of hintedUrls){
+    try {
+      const hello = await helloSeed(u);
+      hintedHello.push({ token_name: "hint", token_index: 0, ...hello });
+    } catch {}
+  }
+
+  const all = [...results, ...hintedHello];
+
+  const dedup = new Map();
+  for (const n of all.sort((a,b)=>a.latency_ms-b.latency_ms)) {
+    // dedupe by cluster worker if available, else cluster node, else url
+    const key =
+      (n.node_id && n.worker_id) ? `cw:${n.node_id}:${n.worker_id}` :
+      (n.node_id ? `cn:${n.node_id}` : `url:${n.url}`);
+    if (!dedup.has(key)) dedup.set(key, n);
+  }
+
+  const unique = Array.from(dedup.values()).sort((a,b)=>a.latency_ms-b.latency_ms);
+  STATE.seeds = unique;
+  STATE.connectedSeeds = unique.slice(0, MAX_CONNECTED_SEEDS);
+
+  // keep all connected seeds in discovered cache so they can be gossiped out
+  for (const s of STATE.connectedSeeds) addDiscoveredSeedUrl(s.url);
+
+  updateMiniStats();
+  if (STATE.connectedSeeds.length) setStatus("netStatus", `Connected to ${STATE.connectedSeeds.length} seed(s)`, "ok");
+  else setStatus("netStatus", "Disconnected", "warn");
+}
+
 async function startSeedScanLoop(){
   if (STATE.tokenScan.running) return;
   STATE.tokenScan.running = true;
@@ -1136,22 +1200,7 @@ async function startSeedScanLoop(){
   (async () => {
     while (STATE.tokenScan.running) {
       try {
-        const results = await scanSeedsOnce();
-        const dedup = new Map();
-        for (const n of results.sort((a,b)=>a.latency_ms-b.latency_ms)) {
-          const key = (n.node_id || "") ? `id:${n.node_id}` : `url:${n.url}`;
-          if (!dedup.has(key)) dedup.set(key, n);
-        }
-        const unique = Array.from(dedup.values()).sort((a,b)=>a.latency_ms-b.latency_ms);
-        STATE.seeds = unique;
-        STATE.connectedSeeds = unique.slice(0, MAX_CONNECTED_SEEDS);
-
-        updateMiniStats();
-        if (STATE.connectedSeeds.length) {
-          setStatus("netStatus", `Connected to ${STATE.connectedSeeds.length} seed(s)`, "ok");
-        } else {
-          setStatus("netStatus", `Disconnected`, "warn");
-        }
+        await discoverSeeds();
 
         if (STATE.online) {
           startAllPollLoops();
@@ -1167,22 +1216,6 @@ async function startSeedScanLoop(){
 }
 function stopSeedScanLoop(){ STATE.tokenScan.running = false; }
 
-async function discoverSeeds(){
-  const results = await scanSeedsOnce();
-  const dedup = new Map();
-  for (const n of results.sort((a,b)=>a.latency_ms-b.latency_ms)) {
-    const key = (n.node_id || "") ? `id:${n.node_id}` : `url:${n.url}`;
-    if (!dedup.has(key)) dedup.set(key, n);
-  }
-  const unique = Array.from(dedup.values()).sort((a,b)=>a.latency_ms-b.latency_ms);
-  STATE.seeds = unique;
-  STATE.connectedSeeds = unique.slice(0, MAX_CONNECTED_SEEDS);
-
-  updateMiniStats();
-  if (STATE.connectedSeeds.length) setStatus("netStatus", `Connected to ${STATE.connectedSeeds.length} seed(s)`, "ok");
-  else setStatus("netStatus", "Disconnected", "warn");
-}
-
 /* =========================================================
    NETWORK / HEARTBEAT
 ========================================================= */
@@ -1197,7 +1230,12 @@ async function getFromSeed(seedUrl, path){
   return await fetchJson(noCacheUrl(seedUrl.replace(/\/+$/,"") + path));
 }
 
+/* UPGRADED: send known_nodes hints to server */
 async function sendHeartbeatToSeed(seed){
+  const known_nodes = Array.from(STATE.discoveredNodeUrls)
+    .slice(0, 50)
+    .map(url => ({ url }));
+
   return await postToSeed(seed.url, "/api/peer/heartbeat", {
     peer_id: STATE.peerId,
     display_name: STATE.identity || STATE.peerId,
@@ -1209,10 +1247,12 @@ async function sendHeartbeatToSeed(seed){
       chat: true,
       file_transfer: true,
       datachannel: true
-    }
+    },
+    known_nodes
   });
 }
 
+/* UPGRADED: merge known_nodes returned by server */
 async function sendHeartbeatAll(){
   if (!STATE.online || !STATE.connectedSeeds.length) return;
 
@@ -1223,6 +1263,9 @@ async function sendHeartbeatAll(){
     try {
       const j = await sendHeartbeatToSeed(seed);
       nextConnected.push(seed);
+
+      // learn new node URLs from cluster-aware servers
+      mergeKnownNodesIntoSeeds(j?.known_nodes || []);
 
       const peers = Array.isArray(j?.peers) ? j.peers : [];
       for (const p of peers) {
@@ -1236,7 +1279,8 @@ async function sendHeartbeatAll(){
             online: p.online !== false,
             seed_urls: [seed.url],
             seeds_count: 1,
-            last_seen: Date.now()
+            last_seen: Date.now(),
+            signaling_via_node: p.signaling_via_node !== false
           });
         } else {
           existing.seed_urls = Array.from(new Set([...(existing.seed_urls || []), seed.url]));
@@ -1244,6 +1288,9 @@ async function sendHeartbeatAll(){
           if (!existing.display_name && p.display_name) existing.display_name = p.display_name;
           existing.online = existing.online || (p.online !== false);
           existing.last_seen = Date.now();
+          if (typeof p.signaling_via_node !== "undefined") {
+            existing.signaling_via_node = existing.signaling_via_node || (p.signaling_via_node !== false);
+          }
         }
       }
     } catch {}
@@ -1255,6 +1302,8 @@ async function sendHeartbeatAll(){
   }
 
   STATE.connectedSeeds = nextConnected;
+  for (const s of nextConnected) addDiscoveredSeedUrl(s.url);
+
   STATE.peersById = merged;
   updateMiniStats();
   renderPeers();
