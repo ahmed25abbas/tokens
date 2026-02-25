@@ -3,1405 +3,2109 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>P2P Agar (Multi-Strategy) — serverless P2P with fallbacks</title>
+  <title>P2P Peer Client</title>
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+  <meta http-equiv="Pragma" content="no-cache" />
+  <meta http-equiv="Expires" content="0" />
+
+  <script src="https://js.puter.com/v2/"></script>
+
   <style>
-    html, body { margin: 0; padding: 0; height: 100%; background:#0b0f14; overflow:hidden; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; }
-    #ui { position: fixed; top: 12px; left: 12px; right: 12px; display: flex; gap: 12px; align-items: flex-start; pointer-events: none; z-index: 10; }
-    .panel {
-      pointer-events: auto;
-      background: rgba(20, 26, 34, 0.92);
-      border: 1px solid rgba(255,255,255,0.12);
-      border-radius: 16px;
-      color: #e7eef7;
-      padding: 14px 16px;
-      box-shadow: 0 12px 28px rgba(0,0,0,0.5);
-      backdrop-filter: blur(12px);
-      -webkit-backdrop-filter: blur(12px);
-      max-width: 600px;
+    :root{
+      --bg:#070b16;
+      --panel:rgba(255,255,255,.04);
+      --panel-2:rgba(255,255,255,.03);
+      --line:rgba(255,255,255,.09);
+      --line-2:rgba(255,255,255,.06);
+      --text:#e5e7eb;
+      --muted:#94a3b8;
+      --brand:#7c3aed;
+      --brand2:#06b6d4;
+      --ok:#22c55e;
+      --err:#ef4444;
+      --warn:#f59e0b;
+      --shadow: 0 10px 30px rgba(0,0,0,.25);
+      --radius:16px;
     }
-    .panel h3 { margin: 0 0 10px 0; font-size: 15px; opacity: 0.95; font-weight: 600; letter-spacing: -0.2px; }
-    .row { display:flex; gap:10px; align-items:center; margin-top:10px; flex-wrap: wrap; }
-    input, button, textarea, select {
-      background: rgba(255,255,255,0.08);
-      border: 1px solid rgba(255,255,255,0.15);
-      color: #e7eef7;
-      border-radius: 10px;
-      padding: 10px 14px;
-      outline: none;
-      font-size: 13px;
-      transition: all 0.15s ease;
+    *{box-sizing:border-box}
+    html,body{height:100%;margin:0}
+    body{
+      color:var(--text);
+      font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;
+      background:
+        radial-gradient(900px 400px at 10% -10%, rgba(124,58,237,.20), transparent 60%),
+        radial-gradient(900px 500px at 95% 0%, rgba(6,182,212,.14), transparent 60%),
+        linear-gradient(180deg,#030712,#0b1020);
+      overflow:hidden;
     }
-    input:focus, select:focus { border-color: #7c3aed; box-shadow: 0 0 0 3px rgba(124,58,237,0.2); }
-    input { flex: 1; min-width: 160px; }
-    button { 
-      cursor: pointer; 
-      font-weight: 500;
-      background: linear-gradient(135deg, #3b3f5c, #2a2f45);
-      border: none;
-      box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+
+    .app{
+      height:100%;
+      display:grid;
+      grid-template-columns: 340px 1fr;
+      gap:12px;
+      padding:12px;
     }
-    button:hover { background: linear-gradient(135deg, #4a4f6e, #353b54); transform: translateY(-1px); }
-    button.primary { background: linear-gradient(135deg, #7c3aed, #6d28d9); }
-    button.primary:hover { background: linear-gradient(135deg, #8b4aff, #7c3aed); }
-    small { opacity: 0.8; line-height: 1.5; display:block; font-size: 12px; }
-    #peers { margin: 12px 0 0 0; padding: 0; list-style: none; max-height: 260px; overflow:auto; border-radius: 8px; }
-    #peers li { padding: 8px 10px; border-radius: 8px; display:flex; justify-content: space-between; gap:12px; }
-    #peers li:nth-child(odd) { background: rgba(255,255,255,0.05); }
-    .tag { font-size: 12px; opacity: 0.8; background: rgba(255,255,255,0.1); padding: 2px 8px; border-radius: 20px; }
-    #toast {
-      position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
-      background: rgba(20,26,34,0.95);
-      color:#e7eef7;
-      border: 1px solid rgba(255,255,255,0.15);
-      border-radius: 999px;
-      padding: 12px 20px;
-      box-shadow: 0 12px 30px rgba(0,0,0,0.6);
+
+    .panel,.main{
+      border:1px solid var(--line);
+      background:var(--panel);
+      border-radius:18px;
+      backdrop-filter: blur(10px);
+      overflow:hidden;
+      box-shadow: var(--shadow);
+      min-width:0;
+      min-height:0;
+    }
+
+    .panel{ display:flex; flex-direction:column; }
+    .main{
+      display:grid;
+      grid-template-rows:auto auto 1fr auto;
+      min-height:0;
+    }
+
+    .sec{
+      padding:12px;
+      border-bottom:1px solid var(--line-2);
+    }
+    .sec:last-child{border-bottom:none}
+
+    .title{
+      margin:0 0 8px;
+      font-size:13px;
+      letter-spacing:.03em;
+      text-transform:uppercase;
+      color:#dbeafe;
+      opacity:.95;
+      font-weight:700;
+    }
+
+    .row{display:flex; gap:8px; flex-wrap:wrap}
+    .row > *{min-width:0}
+
+    input,button{
+      border-radius:12px;
+      border:1px solid rgba(255,255,255,.12);
+      color:var(--text);
+      font-size:13px;
+      padding:10px 12px;
+      background:rgba(255,255,255,.03);
+      outline:none;
+      transition:.16s ease;
+    }
+    input:focus{
+      border-color: rgba(124,58,237,.7);
+      box-shadow: 0 0 0 3px rgba(124,58,237,.16);
+    }
+    button{
+      cursor:pointer;
+      border:none;
+      font-weight:600;
+      background:linear-gradient(90deg,var(--brand),var(--brand2));
+      box-shadow:0 6px 18px rgba(124,58,237,.2);
+    }
+    button:hover{filter:brightness(1.06)}
+    button:active{transform:translateY(1px)}
+    button.secondary{
+      background:rgba(255,255,255,.04);
+      border:1px solid rgba(255,255,255,.12);
+      box-shadow:none;
+    }
+    button.danger{
+      background:linear-gradient(90deg,#b91c1c,#ef4444);
+    }
+    button.ghost{
+      background:transparent;
+      border:1px dashed rgba(255,255,255,.16);
+      box-shadow:none;
+    }
+
+    .status{
+      display:flex;
+      align-items:center;
+      gap:8px;
+      margin-top:8px;
+      border:1px solid rgba(255,255,255,.10);
+      background:rgba(255,255,255,.02);
+      border-radius:12px;
+      padding:10px 12px;
+      font-size:12px;
+      min-height:38px;
+    }
+    .statusDot{
+      width:8px;height:8px;border-radius:999px;flex:0 0 auto;
+      background:#64748b;
+      box-shadow:0 0 0 5px rgba(100,116,139,.12);
+    }
+    .status.ok .statusDot{
+      background:var(--ok);
+      box-shadow:0 0 0 5px rgba(34,197,94,.14);
+    }
+    .status.err .statusDot{
+      background:var(--err);
+      box-shadow:0 0 0 5px rgba(239,68,68,.14);
+    }
+    .status.warn .statusDot{
+      background:var(--warn);
+      box-shadow:0 0 0 5px rgba(245,158,11,.14);
+    }
+
+    .chipRow{display:flex; gap:8px; flex-wrap:wrap}
+    .chip{
+      display:inline-flex; align-items:center; gap:6px;
+      border-radius:999px;
+      padding:5px 10px;
+      border:1px solid rgba(255,255,255,.10);
+      background:rgba(255,255,255,.02);
+      font-size:11px;
+      color:#cbd5e1;
+    }
+
+    .stats{
+      display:grid;
+      grid-template-columns:1fr 1fr;
+      gap:8px;
+    }
+    .stat{
+      border:1px solid rgba(255,255,255,.08);
+      border-radius:12px;
+      padding:10px;
+      background:var(--panel-2);
+    }
+    .stat .k{font-size:11px;color:var(--muted)}
+    .stat .v{margin-top:4px;font-weight:700;font-size:14px}
+
+    .searchWrap{display:flex; gap:8px}
+    .searchWrap input{flex:1}
+
+    .peerList{
+      flex:1;
+      overflow:auto;
+      padding:8px;
+    }
+    .peer{
+      border:1px solid rgba(255,255,255,.08);
+      border-radius:12px;
+      padding:10px;
+      margin-bottom:8px;
+      background:rgba(255,255,255,.02);
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap:8px;
+      cursor:pointer;
+      transition:.14s ease;
+    }
+    .peer:hover{background:rgba(255,255,255,.035)}
+    .peer.active{
+      border-color:rgba(124,58,237,.45);
+      background:rgba(124,58,237,.14);
+      box-shadow: inset 0 0 0 1px rgba(124,58,237,.15);
+    }
+    .peer .name{
+      font-weight:600;
+      font-size:13px;
+      line-height:1.2;
+    }
+    .peer .sub{
+      color:var(--muted);
+      font-size:11px;
+      margin-top:3px;
+    }
+    .badge{
+      border-radius:999px;
+      padding:4px 8px;
+      border:1px solid rgba(255,255,255,.12);
+      font-size:10px;
+      white-space:nowrap;
+      color:#dbeafe;
+      background:rgba(255,255,255,.03);
+    }
+
+    .headerBar{
+      padding:12px;
+      border-bottom:1px solid var(--line-2);
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap:8px;
+      flex-wrap:wrap;
+    }
+    .headerTitle{
+      font-weight:700; font-size:15px;
+    }
+    .headerMeta{
+      display:flex; gap:8px; flex-wrap:wrap; align-items:center;
+    }
+    .pill{
+      display:inline-flex; align-items:center; gap:6px;
+      padding:5px 9px;
+      border-radius:999px;
+      border:1px solid rgba(255,255,255,.10);
+      background:rgba(255,255,255,.02);
+      font-size:11px;
+      color:#dbeafe;
+    }
+    .hdrActions{
+      display:flex; gap:8px; flex-wrap:wrap;
+    }
+
+    .videos{
+      display:grid;
+      grid-template-columns:1fr 1fr;
+      gap:10px;
+      padding:12px;
+      border-bottom:1px solid var(--line-2);
+    }
+    .videoCard{
+      border:1px solid rgba(255,255,255,.08);
+      border-radius:14px;
+      padding:8px;
+      background:rgba(255,255,255,.02);
+      min-width:0;
+    }
+    .videoTop{
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap:8px;
+      margin-bottom:8px;
+    }
+    .videoTop .lbl{
+      font-size:11px;
+      color:var(--muted);
+      letter-spacing:.02em;
+    }
+    .videoFrame{
+      width:100%;
+      aspect-ratio:1 / 1;
+      border-radius:10px;
+      overflow:hidden;
+      background:#000;
+      position:relative;
+      border:1px solid rgba(255,255,255,.06);
+    }
+    .videoFrame video{
+      width:100%;
+      height:100%;
+      object-fit:cover;
+      object-position:center;
+      background:#000;
+      display:block;
+    }
+    .videoEmpty{
+      position:absolute; inset:0;
+      display:flex; align-items:center; justify-content:center;
+      color:#94a3b8; font-size:12px;
+      pointer-events:none;
+    }
+    .iconBtn{
+      border:1px solid rgba(255,255,255,.12);
+      background:rgba(255,255,255,.03);
+      border-radius:10px;
+      padding:6px 9px;
+      font-size:11px;
+      color:var(--text);
+      cursor:pointer;
+    }
+
+    .chatWrap{
+      min-height:0;
+      display:grid;
+      grid-template-rows: 1fr auto;
+    }
+
+    .chatHistory{
+      min-height:0;
+      overflow:auto;
+      padding:12px;
+      background:
+        linear-gradient(180deg, rgba(2,6,23,.35), rgba(2,6,23,.55));
+    }
+
+    .daySep{
+      text-align:center;
+      color:var(--muted);
+      font-size:11px;
+      margin:10px 0 12px;
+      position:relative;
+    }
+    .daySep::before,.daySep::after{
+      content:"";
+      position:absolute;
+      top:50%;
+      width:32%;
+      height:1px;
+      background:rgba(255,255,255,.06);
+    }
+    .daySep::before{left:0}
+    .daySep::after{right:0}
+
+    .msg{
+      display:flex;
+      margin-bottom:10px;
+      gap:8px;
+    }
+    .msg.me{justify-content:flex-end}
+    .msg.system{justify-content:center}
+    .msg.system .bubble{
+      max-width:90%;
+      background:rgba(255,255,255,.03);
+      border:1px solid rgba(255,255,255,.08);
+      color:#cbd5e1;
+      font-size:12px;
+    }
+
+    .bubble{
+      max-width:min(78%, 650px);
+      border-radius:14px;
+      border:1px solid rgba(255,255,255,.08);
+      background:rgba(255,255,255,.03);
+      padding:8px 10px;
+      box-shadow:0 4px 14px rgba(0,0,0,.12);
+      min-width:140px;
+    }
+    .msg.me .bubble{
+      background:linear-gradient(135deg, rgba(124,58,237,.22), rgba(6,182,212,.16));
+      border-color:rgba(124,58,237,.26);
+    }
+    .msg.peer .bubble{
+      background:rgba(255,255,255,.03);
+    }
+
+    .metaLine{
+      display:flex; align-items:center; justify-content:space-between; gap:8px;
+      margin-bottom:4px;
+      font-size:10px;
+      color:#bfdbfe;
+    }
+    .metaLine .who{
+      color:#dbeafe;
+      font-weight:600;
+      overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+    }
+    .metaLine .time{
+      color:var(--muted);
+      flex:0 0 auto;
+    }
+    .msgText{
+      white-space:pre-wrap;
+      word-break:break-word;
+      font-size:13px;
+      line-height:1.35;
+      color:var(--text);
+    }
+
+    .fileCard{
+      margin-top:6px;
+      border:1px solid rgba(255,255,255,.08);
+      border-radius:12px;
+      padding:8px;
+      background:rgba(255,255,255,.02);
+    }
+    .fileTop{
+      display:flex; justify-content:space-between; gap:8px; align-items:center;
+      font-size:12px;
+    }
+    .fileName{font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+    .fileSize{color:var(--muted); font-size:11px; white-space:nowrap}
+    .fileState{
+      margin-top:6px; font-size:11px; color:var(--muted);
+      display:flex; align-items:center; justify-content:space-between; gap:8px; flex-wrap:wrap;
+    }
+    .fileActions{ display:flex; gap:6px; flex-wrap:wrap; }
+    .miniBtn{
+      padding:5px 8px;
+      border-radius:8px;
+      font-size:11px;
+      border:1px solid rgba(255,255,255,.12);
+      background:rgba(255,255,255,.03);
+      color:var(--text);
+      cursor:pointer;
+    }
+
+    .composer{
+      border-top:1px solid var(--line-2);
+      padding:10px;
+      display:grid;
+      grid-template-columns: 1fr auto;
+      gap:8px;
+      background:rgba(2,6,23,.22);
+    }
+    .composerTop{
+      display:flex; gap:8px; align-items:center;
+      grid-column:1 / -1;
+      flex-wrap:wrap;
+    }
+    .composer input[type="text"]{ width:100%; }
+    .composerMain{
+      display:flex; gap:8px;
+      grid-column:1 / -1;
+    }
+    .composerMain input[type="text"]{ flex:1; }
+    .composerFile{
+      display:flex; gap:8px; align-items:center; flex-wrap:wrap;
+    }
+    .composer input[type="file"]{
+      border:none;
+      background:transparent;
+      padding:0;
+      font-size:12px;
+    }
+
+    .incomingBar{
       display:none;
-      z-index: 20;
-      max-width: 92vw;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      font-weight: 500;
-      backdrop-filter: blur(8px);
+      margin-top:8px;
+      border:1px solid rgba(245,158,11,.28);
+      background:rgba(245,158,11,.08);
+      border-radius:12px;
+      padding:10px;
+      font-size:12px;
+      align-items:center;
+      justify-content:space-between;
+      gap:8px;
+      flex-wrap:wrap;
     }
-    canvas { display:block; }
-    .pill { 
-      padding: 6px 12px; 
-      border-radius: 999px; 
-      border: 1px solid rgba(255,255,255,0.15); 
-      background: rgba(255,255,255,0.08); 
-      font-size: 12px;
-      font-weight: 500;
-    }
-    .pill.success { background: rgba(34,197,94,0.15); border-color: rgba(34,197,94,0.3); color: #86efac; }
-    .pill.warn { background: rgba(245,158,11,0.15); border-color: rgba(245,158,11,0.3); color: #fcd34d; }
-    .pill.error { background: rgba(239,68,68,0.15); border-color: rgba(239,68,68,0.3); color: #fca5a5; }
-    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; font-size: 11px; }
-    .tiny { font-size: 11px; }
-    textarea { width: 100%; min-height: 70px; max-height: 160px; resize: vertical; font-family: monospace; background: rgba(0,0,0,0.3); }
-    .strategy-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin: 10px 0; }
-    .strategy-item { 
-      background: rgba(0,0,0,0.3); 
-      border-radius: 8px; 
-      padding: 8px 4px; 
-      text-align: center; 
-      font-size: 11px;
-      border: 1px solid rgba(255,255,255,0.1);
-    }
-    .strategy-item.active { border-color: #7c3aed; background: rgba(124,58,237,0.15); }
-    .strategy-item .status-dot { width: 8px; height: 8px; border-radius: 8px; margin: 0 auto 4px; }
-    .strategy-item .name { font-weight: 600; margin-bottom: 2px; }
-  </style>
-  
-  <!-- Load multiple signaling libraries -->
-  <script src="https://cdn.jsdelivr.net/npm/p2pt@1.3.0/dist/umd/p2pt.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/socket.io-client@4.7.2/dist/socket.io.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.2/dist/peerjs.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/simple-peer@9.11.1/dist/simplepeer.min.js"></script>
-  <script type="importmap">
-    {
-      "imports": {
-        "trystero-torrent": "https://esm.run/trystero/torrent",
-        "trystero-nostr": "https://esm.run/trystero/nostr",
-        "trystero-mqtt": "https://esm.run/trystero/mqtt",
-        "trystero-firebase": "https://esm.run/trystero/firebase",
-        "trystero-ipfs": "https://esm.run/trystero/ipfs"
+    .incomingBar.show{display:flex}
+
+    .muted{color:var(--muted); font-size:12px}
+
+    @media (max-width: 1024px){
+      .app{
+        grid-template-columns:1fr;
+        grid-template-rows: 44% 56%;
+      }
+      .videos{
+        grid-template-columns:1fr 1fr;
       }
     }
-  </script>
+    @media (max-width: 760px){
+      .videos{grid-template-columns:1fr}
+      .hdrActions{width:100%}
+      .hdrActions button{flex:1}
+      .bubble{max-width:90%}
+    }
+  </style>
 </head>
 <body>
-  <canvas id="c"></canvas>
-
-  <div id="ui">
-    <div class="panel" style="min-width:440px;">
-      <h3>🚀 Multi-Strategy P2P Agar (Serverless)</h3>
-      <small style="margin-bottom: 8px;">
-        Simultaneously tries multiple signaling strategies: Trystero (Torrent/Nostr/MQTT/IPFS/Firebase), 
-        P2PT, PeerJS (with public server), SimplePeer (with public broker), and WebTorrent trackers.
-        <br/><br/>
-        <b>If one strategy fails, others continue trying in parallel.</b>
-      </small>
-
-      <div class="row">
-        <input id="name" maxlength="18" placeholder="nickname" value="anon" />
-        <button class="primary" id="apply">Apply</button>
-      </div>
-
-      <div class="row">
-        <label class="tag">Room:</label>
-        <input id="room" placeholder="p2p-agar" value="p2p-agar" />
-        <button class="primary" id="rejoin">Rejoin</button>
-        <button id="forceRespawn" style="background: #b45309;">Respawn (R)</button>
-      </div>
-
-      <!-- Strategy status grid -->
-      <div class="strategy-grid" id="strategyGrid">
-        <div class="strategy-item" id="strategy-trystero-torrent"><div class="status-dot" style="background:#6b7280;"></div><div class="name">Torrent</div><span class="tiny" id="status-torrent">idle</span></div>
-        <div class="strategy-item" id="strategy-trystero-nostr"><div class="status-dot" style="background:#6b7280;"></div><div class="name">Nostr</div><span class="tiny" id="status-nostr">idle</span></div>
-        <div class="strategy-item" id="strategy-p2pt"><div class="status-dot" style="background:#6b7280;"></div><div class="name">P2PT</div><span class="tiny" id="status-p2pt">idle</span></div>
-        <div class="strategy-item" id="strategy-peerjs"><div class="status-dot" style="background:#6b7280;"></div><div class="name">PeerJS</div><span class="tiny" id="status-peerjs">idle</span></div>
-        <div class="strategy-item" id="strategy-simplepeer"><div class="status-dot" style="background:#6b7280;"></div><div class="name">SimplePeer</div><span class="tiny" id="status-simplepeer">idle</span></div>
-        <div class="strategy-item" id="strategy-mqtt"><div class="status-dot" style="background:#6b7280;"></div><div class="name">MQTT</div><span class="tiny" id="status-mqtt">idle</span></div>
-        <div class="strategy-item" id="strategy-firebase"><div class="status-dot" style="background:#6b7280;"></div><div class="name">Firebase</div><span class="tiny" id="status-firebase">idle</span></div>
-        <div class="strategy-item" id="strategy-ipfs"><div class="status-dot" style="background:#6b7280;"></div><div class="name">IPFS</div><span class="tiny" id="status-ipfs">idle</span></div>
-      </div>
-
-      <div class="row" style="justify-content: space-between;">
-        <span id="meshBadge" class="pill warn">Mesh: 0 peers</span>
-        <span id="activeStrategy" class="pill">Active: none</span>
-      </div>
-
-      <small id="status" style="margin: 8px 0;">Initializing multi-strategy connection...</small>
-
-      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 8px;">
-        <div>
-          <small><b>📡 Signaling Status:</b></small>
-          <textarea id="signalingStatus" class="mono tiny" readonly rows="3" placeholder="(connecting...)"></textarea>
+  <div class="app">
+    <!-- SIDEBAR -->
+    <aside class="panel">
+      <div class="sec">
+        <div class="title">Status</div>
+        <div class="chipRow">
+          <span class="chip" id="seedChip">Seeds: 0</span>
+          <span class="chip" id="peerChip">Peers: 0</span>
         </div>
-        <div>
-          <small><b>🌍 Peer Discovery:</b></small>
-          <textarea id="discoveryStatus" class="mono tiny" readonly rows="3" placeholder="(waiting for peers...)"></textarea>
+        <div id="netStatus" class="status warn">
+          <span class="statusDot"></span>
+          <span id="netStatusText">Connecting…</span>
         </div>
       </div>
 
-      <div class="row">
-        <button id="copyDebug" style="flex:1">📋 Copy Debug Info</button>
-        <button id="refreshStrategies" style="flex:1">🔄 Restart Strategies</button>
-      </div>
-    </div>
+      <div class="sec">
+        <div class="title">Identity</div>
+        <div class="row">
+          <input id="identityInput" placeholder="Your name" style="flex:1" />
+        </div>
+        <div class="row" style="margin-top:8px">
+          <button onclick="saveIdentity()">Save</button>
+          <button class="secondary" onclick="enableMedia()">Camera</button>
+          <button class="secondary" onclick="autoLogin(true)">Reconnect</button>
+          <button class="danger" onclick="logoutAll()">Offline</button>
+        </div>
+        <div id="idStatus" class="status">
+          <span class="statusDot"></span>
+          <span id="idStatusText">Offline</span>
+        </div>
 
-    <div class="panel" style="min-width:280px;">
-      <h3>👥 Players Online</h3>
-      <ul id="peers"></ul>
-      <small>Press <b>R</b> to respawn • Open in another tab to test</small>
-    </div>
+        <div id="incomingBar" class="incomingBar">
+          <div id="incomingText">Incoming request</div>
+          <div class="row" style="gap:6px">
+            <button class="secondary" onclick="acceptIncoming('data')">Accept Chat</button>
+            <button onclick="acceptIncoming('media')">Accept Call</button>
+            <button class="danger" onclick="rejectIncoming()">Reject</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="sec">
+        <div class="title">Peers</div>
+        <div class="searchWrap">
+          <input id="peerSearch" placeholder="Search peers…" oninput="renderPeers()" />
+          <button class="secondary" onclick="refreshPeersNow()">↻</button>
+        </div>
+        <div class="stats" style="margin-top:8px">
+          <div class="stat"><div class="k">Connected</div><div class="v" id="statSeeds">0</div></div>
+          <div class="stat"><div class="k">Visible</div><div class="v" id="statPeers">0</div></div>
+        </div>
+      </div>
+
+      <div id="peerList" class="peerList">
+        <div class="muted">No peers found.</div>
+      </div>
+    </aside>
+
+    <!-- MAIN -->
+    <main class="main">
+      <div class="headerBar">
+        <div>
+          <div class="headerTitle">P2P Chat & Calls</div>
+          <div class="headerMeta">
+            <span class="pill" id="selfPill">You: -</span>
+            <span class="pill" id="selectedPill">Peer: none</span>
+            <span class="pill" id="sessionPill">Session: idle</span>
+          </div>
+        </div>
+
+        <div class="hdrActions">
+          <button class="secondary" onclick="connectSelectedData()">Connect</button>
+          <button onclick="dialSelectedMedia()">Call</button>
+          <button class="danger" onclick="hangup()">Disconnect</button>
+        </div>
+      </div>
+
+      <div class="videos">
+        <div class="videoCard">
+          <div class="videoTop">
+            <div class="lbl">Local Camera</div>
+            <button class="iconBtn" onclick="toggleFullscreen('localVideoFrame')">Fullscreen</button>
+          </div>
+          <div class="videoFrame" id="localVideoFrame" ondblclick="toggleFullscreen('localVideoFrame')">
+            <video id="localVideo" autoplay muted playsinline></video>
+            <div class="videoEmpty" id="localVideoHint">Camera off</div>
+          </div>
+        </div>
+
+        <div class="videoCard">
+          <div class="videoTop">
+            <div class="lbl">Remote Camera</div>
+            <button class="iconBtn" onclick="toggleFullscreen('remoteVideoFrame')">Fullscreen</button>
+          </div>
+          <div class="videoFrame" id="remoteVideoFrame" ondblclick="toggleFullscreen('remoteVideoFrame')">
+            <video id="remoteVideo" autoplay playsinline></video>
+            <div class="videoEmpty" id="remoteVideoHint">No video</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="chatWrap">
+        <div id="chatHistory" class="chatHistory">
+          <div class="daySep">Today</div>
+        </div>
+
+        <div class="composer">
+          <div class="composerTop">
+            <div class="composerFile">
+              <input id="fileInput" type="file" />
+              <button class="secondary" onclick="sendSelectedFile()">Send File</button>
+            </div>
+            <span class="muted">You can chat/file-share with a peer after Connect or Call.</span>
+          </div>
+
+          <div class="composerMain">
+            <input id="chatText" type="text" placeholder="Type a message…" />
+            <button class="secondary" onclick="sendChat()">Send</button>
+          </div>
+        </div>
+      </div>
+    </main>
   </div>
 
-  <div id="toast"></div>
+<script>
+/* =========================================================
+   CONFIG / STATE
+========================================================= */
+const STARTUP_RELOAD_FLAG = "__p2p_peer_client_reloaded_once__";
+const HEARTBEAT_MS = 5000;
+const NETWORK_REFRESH_MS = 15000;
+const MAX_CONNECTED_SEEDS = 5;
 
-  <script type="module">
-    // ==================== IMPORTS ====================
-    import * as trysteroTorrent from 'trystero-torrent';
-    import * as trysteroNostr from 'trystero-nostr';
-    import * as trysteroMqtt from 'trystero-mqtt';
-    import * as trysteroFirebase from 'trystero-firebase';
-    import * as trysteroIpfs from 'trystero-ipfs';
+// Internal token/seed discovery (hidden from UI)
+const TOKEN_SCAN_MAX = 999;
+const TOKEN_SCAN_STOP_AFTER_CONSECUTIVE_MISSES = 10;
+const TOKEN_SCAN_BACKOFF_MS = 10000;
 
-    // ==================== CONFIGURATION ====================
-    const CONFIG = {
-      // Public STUN servers for NAT traversal
-      iceServers: [
-        { urls: ['stun:stun.cloudflare.com:3478'] },
-        { urls: ['stun:stun.l.google.com:19302'] },
-        { urls: ['stun:stun1.l.google.com:19302'] },
-        { urls: ['stun:stun2.l.google.com:19302'] },
-        { urls: ['stun:stun3.l.google.com:19302'] },
-        { urls: ['stun:stun4.l.google.com:19302'] }
-      ],
-      
-      // Public TURN servers (fallback for symmetric NATs)
-      // These are rate-limited public TURN servers from Metered.ca
-      turnServers: [
-        {
-          urls: ['turn:global.turn.metered.ca:80?transport=tcp'],
-          username: 'openrelayproject',
-          credential: 'openrelayproject'
-        },
-        {
-          urls: ['turn:global.turn.metered.ca:443?transport=tcp'],
-          username: 'openrelayproject',
-          credential: 'openrelayproject'
-        }
-      ],
+// Internal repo (hidden from UI)
+const REPO_CFG = {
+  owner: "ahmed25abbas",
+  repo: "tokens",
+  branch: "main"
+};
 
-      // WebTorrent trackers for Trystero
-      torrentRelays: [
-        'wss://tracker.openwebtorrent.com',
-        'wss://tracker.btorrent.xyz',
-        'wss://tracker.webtorrent.dev',
-        'wss://tracker.files.fm:7073/announce',
-        'ws://tracker.files.fm:7072/announce',
-        'wss://tracker.webrtc.fish',
-        'wss://tracker.novage.com.ua:443/announce',
-        'wss://tracker.fastcast.nz:443/announce'
-      ],
+const GITHUB_FETCH = { byToken: {} };
 
-      // MQTT brokers for Trystero MQTT
-      mqttBrokers: [
-        'wss://broker.emqx.io:8084/mqtt',
-        'wss://test.mosquitto.org:8081/mqtt',
-        'wss://mqtt.eclipseprojects.io:443/mqtt'
-      ],
+const STATE = {
+  seeds: [],
+  connectedSeeds: [],
+  seedPollLoops: new Map(),
 
-      // Firebase config (public demo)
-      firebaseConfig: {
-        apiKey: "AIzaSyArGpGp7I5q7q7q7q7q7q7q7q7q7q7q7q7",
-        authDomain: "p2p-agar-demo.firebaseapp.com",
-        databaseURL: "https://p2p-agar-demo.firebaseio.com",
-        projectId: "p2p-agar-demo",
-        storageBucket: "p2p-agar-demo.appspot.com",
-        messagingSenderId: "123456789012"
-      },
+  peerId: "",          // hidden numeric id for protocol
+  identity: "",        // user-editable single visible identity (name)
+  online: false,
+  peersById: new Map(),
+  selectedPeer: "",
 
-      // PeerJS public server
-      peerjsHost: '0.peerjs.com',
-      peerjsPort: 443,
-      peerjsPath: '/',
-      
-      // SimplePeer signaling server (public)
-      simplePeerSignaler: 'wss://signal.simplepeer.org',
-      
-      // P2PT configuration
-      p2ptTracker: 'wss://tracker.openwebtorrent.com',
-      
-      // App identifier
-      appId: 'p2p-agar-multi-v2'
-    };
+  incomingCall: null,
+  activeCallId: "",
+  activePeer: "",
+  activeSeedUrl: "",
+  sessionMode: "idle", // idle | data | media
+  outgoingRequestedMode: "data",
 
-    // ==================== UTILITIES ====================
-    const $ = (id) => document.getElementById(id);
-    const toastEl = $('toast');
-    
-    function toast(msg, ms = 2500, type = 'info') {
-      toastEl.textContent = msg;
-      toastEl.style.display = 'block';
-      toastEl.style.background = type === 'error' ? 'rgba(239,68,68,0.95)' : 
-                                 type === 'success' ? 'rgba(34,197,94,0.95)' : 
-                                 'rgba(20,26,34,0.95)';
-      clearTimeout(toastEl._t);
-      toastEl._t = setTimeout(() => toastEl.style.display = 'none', ms);
+  heartbeatTimer: null,
+  networkTickTimer: null,
+
+  localStream: null,
+  remoteStream: null,
+  pc: null,
+
+  chatDc: null,
+  fileDc: null,
+
+  makingOffer: false,
+  polite: false,
+  pendingIce: [],
+
+  fileRecv: {}, // by transfer id
+  fileSendBusy: false,
+
+  chatHistory: [], // rendered timeline entries
+
+  tokenScan: {
+    running: false,
+    missStreak: 0,
+    index: 1,
+    lastCycleStartedAt: 0,
+  }
+};
+
+const RTC_CONFIG = {
+  iceServers: [{ urls: ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"] }]
+};
+
+/* =========================================================
+   UI HELPERS
+========================================================= */
+function $(id){ return document.getElementById(id); }
+
+function setStatus(elId, msg, type="ok"){
+  const root = $(elId);
+  const textEl = $(elId + "Text");
+  if (!root || !textEl) return;
+  root.className = "status " + (type || "ok");
+  textEl.textContent = msg;
+}
+
+function formatTime(ts){
+  try{
+    return new Date(ts).toLocaleTimeString([], {hour:"2-digit", minute:"2-digit"});
+  }catch{
+    return "";
+  }
+}
+
+function formatBytes(n){
+  const x = Number(n)||0;
+  if (x < 1024) return `${x} B`;
+  if (x < 1024*1024) return `${(x/1024).toFixed(1)} KB`;
+  if (x < 1024*1024*1024) return `${(x/1024/1024).toFixed(1)} MB`;
+  return `${(x/1024/1024/1024).toFixed(1)} GB`;
+}
+
+function safeName(s){ return String(s ?? "").trim() || "Unknown"; }
+
+function escapeHtml(s){
+  return String(s ?? "").replace(/[&<>"']/g, c => (
+    {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]
+  ));
+}
+
+function randomNumericId(len=8){
+  let s = "";
+  for (let i=0;i<len;i++) s += Math.floor(Math.random()*10);
+  if (s[0] === "0") s = "1" + s.slice(1);
+  return s;
+}
+
+function sleep(ms){ return new Promise(r => setTimeout(r, ms)); }
+
+function noCacheUrl(url){
+  const u = new URL(url, window.location.href);
+  u.searchParams.set("_cb", `${Date.now()}-${Math.random().toString(36).slice(2,8)}`);
+  return u.toString();
+}
+
+async function fetchJson(url, opts={}){
+  const r = await fetch(url, { cache:"no-store", redirect:"follow", ...opts });
+  const ct = r.headers.get("content-type") || "";
+  const body = ct.includes("application/json") ? await r.json() : await r.text();
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  return body;
+}
+
+async function safePlay(el){
+  try {
+    const p = el?.play?.();
+    if (p && typeof p.then === "function") await p;
+  } catch {}
+}
+
+function updateVideoHints(){
+  $("localVideoHint").style.display = STATE.localStream ? "none" : "flex";
+  const hasRemote = !!($("remoteVideo").srcObject);
+  $("remoteVideoHint").style.display = hasRemote ? "none" : "flex";
+}
+
+function toggleFullscreen(id){
+  const el = $(id);
+  if (!el) return;
+  if (document.fullscreenElement) {
+    document.exitFullscreen?.();
+  } else {
+    el.requestFullscreen?.();
+  }
+}
+
+function updateHeaderPills(){
+  $("selfPill").textContent = `You: ${STATE.peerId}(${STATE.identity || STATE.peerId})`;
+  const p = STATE.selectedPeer ? STATE.peersById.get(STATE.selectedPeer) : null;
+  $("selectedPill").textContent = p
+    ? `Peer: ${p.peer_id}(${p.display_name || p.peer_id})`
+    : "Peer: none";
+  $("sessionPill").textContent = `Session: ${STATE.sessionMode}`;
+}
+
+function updateMiniStats(){
+  $("statSeeds").textContent = String(STATE.connectedSeeds.length);
+  $("statPeers").textContent = String(STATE.peersById.size);
+  $("seedChip").textContent = `Seeds: ${STATE.connectedSeeds.length}`;
+  $("peerChip").textContent = `Peers: ${STATE.peersById.size}`;
+}
+
+function simpleError(prefix, fallback){
+  return `${prefix}: ${fallback || "Something went wrong"}`;
+}
+
+/* =========================================================
+   CHAT HISTORY UI
+========================================================= */
+function addChatEntry(entry){
+  STATE.chatHistory.push(entry);
+  renderChatHistory();
+}
+
+function addSystemMessage(text){
+  addChatEntry({
+    kind: "system",
+    text: String(text || ""),
+    ts: Date.now()
+  });
+}
+
+function whoLabel(me, peer){
+  if (me) return `${STATE.peerId}(${STATE.identity || STATE.peerId})`;
+  if (!peer) return "Peer";
+  return `${peer.peer_id}(${peer.display_name || peer.peer_id})`;
+}
+
+function renderChatHistory(){
+  const root = $("chatHistory");
+  root.innerHTML = `<div class="daySep">Today</div>`;
+
+  for (const m of STATE.chatHistory){
+    const wrap = document.createElement("div");
+    wrap.className = `msg ${m.role || "system"}`;
+
+    if (m.kind === "system"){
+      wrap.innerHTML = `<div class="bubble">${escapeHtml(m.text)}</div>`;
+      root.appendChild(wrap);
+      continue;
     }
 
-    function hashStringToU32(str) {
-      let h = 2166136261 >>> 0;
-      for (let i = 0; i < str.length; i++) {
-        h ^= str.charCodeAt(i);
-        h = Math.imul(h, 16777619);
-      }
-      return h >>> 0;
+    const metaWho = m.who || (m.role === "me" ? whoLabel(true) : whoLabel(false, m.peer));
+    const time = formatTime(m.ts || Date.now());
+
+    const bubble = document.createElement("div");
+    bubble.className = "bubble";
+
+    let inner = `
+      <div class="metaLine">
+        <div class="who">${escapeHtml(metaWho)}</div>
+        <div class="time">${escapeHtml(time)}</div>
+      </div>
+    `;
+
+    if (m.kind === "chat"){
+      inner += `<div class="msgText">${escapeHtml(m.text || "")}</div>`;
     }
 
-    function mulberry32(seed) {
-      return function() {
-        let t = (seed += 0x6D2B79F5) >>> 0;
-        t = Math.imul(t ^ (t >>> 15), t | 1);
-        t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-      };
+    if (m.kind === "file"){
+      const rec = m.file || {};
+      const canDownload = !!rec.blob;
+      const fileId = escapeHtml(String(m.id));
+      inner += `
+        <div class="fileCard">
+          <div class="fileTop">
+            <div class="fileName">${escapeHtml(rec.name || "file")}</div>
+            <div class="fileSize">${escapeHtml(formatBytes(rec.size || 0))}</div>
+          </div>
+          <div class="fileState">
+            <span>${escapeHtml(rec.state || "pending")}</span>
+            <div class="fileActions">
+              ${canDownload ? `<button class="miniBtn" onclick="downloadPendingFile('${fileId}')">Download</button>` : ""}
+              ${m.role !== "me" ? `<button class="miniBtn" onclick="toggleKeepPendingFile('${fileId}')">${rec.kept ? "Kept" : "Keep Pending"}</button>` : ""}
+              ${m.role !== "me" ? `<button class="miniBtn" onclick="discardPendingFile('${fileId}')">Discard</button>` : ""}
+            </div>
+          </div>
+        </div>
+      `;
     }
 
-    function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
-    function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+    bubble.innerHTML = inner;
+    wrap.appendChild(bubble);
+    root.appendChild(wrap);
+  }
 
-    function randomColor() {
-      const hue = Math.floor(Math.random() * 360);
-      return `hsl(${hue} 85% 60%)`;
+  root.scrollTop = root.scrollHeight;
+}
+
+function findChatEntryById(id){
+  return STATE.chatHistory.find(x => String(x.id) === String(id));
+}
+
+function downloadPendingFile(id){
+  const item = findChatEntryById(id);
+  const f = item?.file;
+  if (!f || !f.blob) return;
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(f.blob);
+  a.download = f.name || "file";
+  a.click();
+  setTimeout(()=> URL.revokeObjectURL(a.href), 30000);
+  f.state = "downloaded";
+  renderChatHistory();
+}
+
+function toggleKeepPendingFile(id){
+  const item = findChatEntryById(id);
+  if (!item?.file) return;
+  item.file.kept = !item.file.kept;
+  if (item.file.kept && item.file.state === "received") item.file.state = "kept in chat";
+  if (!item.file.kept && item.file.state === "kept in chat") item.file.state = "received";
+  renderChatHistory();
+}
+
+function discardPendingFile(id){
+  const item = findChatEntryById(id);
+  if (!item?.file) return;
+  if (item.file.blob && item.file.blobUrl) {
+    try { URL.revokeObjectURL(item.file.blobUrl); } catch {}
+  }
+  item.file.blob = null;
+  item.file.state = "discarded";
+  renderChatHistory();
+}
+
+/* =========================================================
+   STORAGE / IDENTITY (single visible input)
+========================================================= */
+function getStoredIdentity(){
+  try { return JSON.parse(localStorage.getItem("p2p_identity_v2") || "{}"); }
+  catch { return {}; }
+}
+
+function saveStoredIdentity(){
+  try {
+    localStorage.setItem("p2p_identity_v2", JSON.stringify({
+      peerId: STATE.peerId,   // hidden stable numeric id
+      identity: STATE.identity
+    }));
+  } catch {}
+}
+
+function ensureIdentity(){
+  const saved = getStoredIdentity();
+  STATE.peerId = (/^\d{6,14}$/.test(saved.peerId || "")) ? saved.peerId : randomNumericId(8);
+  STATE.identity = safeName(saved.identity || "").slice(0, 40);
+  if (!STATE.identity || STATE.identity === "Unknown") STATE.identity = `User${STATE.peerId.slice(-4)}`;
+
+  $("identityInput").value = STATE.identity;
+  saveStoredIdentity();
+  updateHeaderPills();
+}
+
+function saveIdentity(){
+  const typed = safeName($("identityInput").value).slice(0,40);
+  STATE.identity = typed;
+  $("identityInput").value = STATE.identity;
+  saveStoredIdentity();
+  updateHeaderPills();
+  setStatus("idStatus", `Saved as ${STATE.identity}`, "ok");
+}
+
+/* =========================================================
+   ONE-TIME STARTUP CACHE CLEAR + RELOAD
+========================================================= */
+async function clearCachesOnceAndReload(){
+  try {
+    if ("caches" in window) {
+      const keys = await caches.keys();
+      await Promise.all(keys.map(k => caches.delete(k)));
     }
-
-    function escapeHtml(s) {
-      return String(s).replace(/[&<>"']/g, (c) => ({
-        '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'
-      }[c]));
+    if ("serviceWorker" in navigator) {
+      const regs = await navigator.serviceWorker.getRegistrations();
+      await Promise.all(regs.map(r => r.unregister()));
     }
-
-    // ==================== CANVAS / WORLD ====================
-    const canvas = $('c');
-    const ctx = canvas.getContext('2d');
-    
-    function resize() {
-      canvas.width = Math.floor(window.innerWidth * devicePixelRatio);
-      canvas.height = Math.floor(window.innerHeight * devicePixelRatio);
-      canvas.style.width = window.innerWidth + 'px';
-      canvas.style.height = window.innerHeight + 'px';
-      ctx.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
-    }
-    window.addEventListener('resize', resize);
-    resize();
-
-    const WORLD = { w: 5000, h: 5000 };
-
-    // ==================== PLAYER STATE ====================
-    const my = {
-      id: crypto.randomUUID(),
-      name: 'anon',
-      color: randomColor(),
-      x: WORLD.w * 0.5,
-      y: WORLD.h * 0.5,
-      r: 26,
-      vx: 0,
-      vy: 0,
-      alive: true,
-      seq: 0,
-      lastSentAt: 0
-    };
-
-    const remotes = new Map(); // peerId -> player state
-    const peerConnections = new Map(); // peerId -> connection object (varies by strategy)
-
-    const PELLET_COUNT = 800;
-    let pellets = [];
-    let removedPellets = new Set();
-
-    function rebuildPellets(roomId) {
-      const seed = hashStringToU32('pellets:' + roomId);
-      const rnd = mulberry32(seed);
-      pellets = [];
-      removedPellets = new Set();
-      for (let i = 0; i < PELLET_COUNT; i++) {
-        pellets.push({
-          id: i,
-          x: Math.floor(rnd() * WORLD.w),
-          y: Math.floor(rnd() * WORLD.h),
-          r: 4 + Math.floor(rnd() * 5)
-        });
-      }
-    }
-
-    // ==================== UI ELEMENTS ====================
-    const UI = {
-      status: $('status'),
-      name: $('name'),
-      apply: $('apply'),
-      room: $('room'),
-      rejoin: $('rejoin'),
-      forceRespawn: $('forceRespawn'),
-      peers: $('peers'),
-      meshBadge: $('meshBadge'),
-      activeStrategy: $('activeStrategy'),
-      signalingStatus: $('signalingStatus'),
-      discoveryStatus: $('discoveryStatus'),
-      copyDebug: $('copyDebug'),
-      refreshStrategies: $('refreshStrategies'),
-      strategyGrid: {
-        torrent: { dot: $('#strategy-trystero-torrent .status-dot'), text: $('#status-torrent') },
-        nostr: { dot: $('#strategy-trystero-nostr .status-dot'), text: $('#status-nostr') },
-        p2pt: { dot: $('#strategy-p2pt .status-dot'), text: $('#status-p2pt') },
-        peerjs: { dot: $('#strategy-peerjs .status-dot'), text: $('#status-peerjs') },
-        simplepeer: { dot: $('#strategy-simplepeer .status-dot'), text: $('#status-simplepeer') },
-        mqtt: { dot: $('#strategy-mqtt .status-dot'), text: $('#status-mqtt') },
-        firebase: { dot: $('#strategy-firebase .status-dot'), text: $('#status-firebase') },
-        ipfs: { dot: $('#strategy-ipfs .status-dot'), text: $('#status-ipfs') }
-      }
-    };
-
-    // Load saved values
-    UI.room.value = new URL(location.href).hash.match(/room=([^&]+)/)?.[1] || 'p2p-agar';
-    UI.name.value = localStorage.getItem('p2pAgarName') || 'anon';
-    my.name = UI.name.value;
-
-    // ==================== MULTI-STRATEGY MANAGER ====================
-    class MultiStrategyManager {
-      constructor() {
-        this.strategies = new Map();
-        this.activeConnections = new Map(); // strategy name -> connection/room object
-        this.strategyStatus = new Map(); // strategy name -> status
-        this.peerCallbacks = new Map(); // event -> callback
-        this.messageCallbacks = new Map();
-        this.roomId = 'p2p-agar';
-        this.initialized = false;
-        this.bestStrategy = null;
-      }
-
-      init(roomId) {
-        this.roomId = roomId;
-        this.initialized = true;
-        this.updateStrategyStatus('global', 'Initializing all strategies...', '#3b82f6');
-        UI.status.textContent = 'Initializing all strategies...';
-        this.startAllStrategies();
-      }
-
-      updateStrategyStatus(strategy, status, color = '#6b7280') {
-        this.strategyStatus.set(strategy, status);
-        const el = UI.strategyGrid[strategy];
-        if (el) {
-          el.dot.style.background = color;
-          el.text.textContent = status;
-        }
-        this.updateSignalingStatus();
-      }
-
-      updateSignalingStatus() {
-        const lines = [];
-        for (const [strategy, status] of this.strategyStatus) {
-          if (strategy !== 'global') {
-            lines.push(`${strategy}: ${status}`);
-          }
-        }
-        UI.signalingStatus.value = lines.join('\n');
-      }
-
-      updateDiscoveryStatus() {
-        const lines = [];
-        for (const [peerId, peer] of remotes) {
-          lines.push(`${peer.name || peerId.slice(0,6)} (r=${peer.r.toFixed(0)}) via ${peer.strategy || 'unknown'}`);
-        }
-        UI.discoveryStatus.value = lines.length ? lines.join('\n') : '(waiting for peers...)';
-      }
-
-      on(event, callback) {
-        this.peerCallbacks.set(event, callback);
-      }
-
-      onMessage(callback) {
-        this.messageCallbacks.set('message', callback);
-      }
-
-      broadcast(data) {
-        // Send via all active strategies
-        for (const [strategy, connection] of this.activeConnections) {
-          try {
-            this.sendViaStrategy(strategy, connection, data);
-          } catch (e) {
-            console.warn(`Failed to send via ${strategy}:`, e);
-          }
-        }
-      }
-
-      sendViaStrategy(strategy, connection, data) {
-        switch(strategy) {
-          case 'torrent':
-          case 'nostr':
-          case 'mqtt':
-          case 'firebase':
-          case 'ipfs':
-            if (connection && connection.sendAction) {
-              connection.sendAction('state', data);
-            }
-            break;
-          case 'p2pt':
-            if (connection && connection.sendToAll) {
-              connection.sendToAll(JSON.stringify({ type: 'state', data }));
-            }
-            break;
-          case 'peerjs':
-            if (connection && connection.connections) {
-              for (const conn of Object.values(connection.connections)) {
-                if (conn.open) conn.send(JSON.stringify({ type: 'state', data }));
-              }
-            }
-            break;
-          case 'simplepeer':
-            if (connection && connection.forEach) {
-              connection.forEach(p => {
-                if (p && !p.destroyed) p.send(JSON.stringify({ type: 'state', data }));
-              });
-            }
-            break;
-        }
-      }
-
-      handlePeerJoined(strategy, peerId, peerData = {}) {
-        if (!remotes.has(peerId)) {
-          remotes.set(peerId, {
-            peerId,
-            name: peerData.name || peerId.slice(0, 6),
-            color: peerData.color || '#8ad',
-            x: WORLD.w/2,
-            y: WORLD.h/2,
-            r: 22,
-            alive: true,
-            lastHeardAt: performance.now(),
-            strategy: strategy,
-            ...peerData
-          });
-          
-          this.updateDiscoveryStatus();
-          renderPeersList();
-          
-          const cb = this.peerCallbacks.get('peerJoin');
-          if (cb) cb(peerId);
-          
-          toast(`👤 Peer joined via ${strategy}`, 1500, 'success');
-        }
-      }
-
-      handlePeerLeft(peerId) {
-        if (remotes.delete(peerId)) {
-          this.updateDiscoveryStatus();
-          renderPeersList();
-          
-          const cb = this.peerCallbacks.get('peerLeave');
-          if (cb) cb(peerId);
-        }
-      }
-
-      handleMessage(peerId, data) {
-        const cb = this.messageCallbacks.get('message');
-        if (cb) cb(peerId, data);
-      }
-
-      async startAllStrategies() {
-        // Start all strategies in parallel
-        const promises = [
-          this.startTrysteroTorrent(),
-          this.startTrysteroNostr(),
-          this.startP2PT(),
-          this.startPeerJS(),
-          this.startSimplePeer(),
-          this.startTrysteroMqtt(),
-          this.startTrysteroFirebase(),
-          this.startTrysteroIpfs()
-        ];
-
-        // Wait for at least one to succeed
-        const results = await Promise.allSettled(promises);
-        const succeeded = results.filter(r => r.status === 'fulfilled' && r.value);
-        
-        if (succeeded.length > 0) {
-          this.bestStrategy = succeeded[0].value.strategy;
-          UI.activeStrategy.textContent = `Active: ${this.bestStrategy}`;
-          UI.activeStrategy.className = 'pill success';
-          UI.status.textContent = `Connected via ${this.bestStrategy}`;
-          toast(`✅ Connected via ${this.bestStrategy}`, 2000, 'success');
-        } else {
-          UI.activeStrategy.textContent = 'Active: none';
-          UI.activeStrategy.className = 'pill error';
-          UI.status.textContent = 'All strategies failed';
-          toast('❌ All strategies failed', 3000, 'error');
-        }
-      }
-
-      // ==================== STRATEGY IMPLEMENTATIONS ====================
-
-      async startTrysteroTorrent() {
-        this.updateStrategyStatus('torrent', 'connecting', '#f59e0b');
-        
-        try {
-          const config = {
-            appId: CONFIG.appId,
-            relayUrls: CONFIG.torrentRelays,
-            rtcConfig: { 
-              iceServers: [...CONFIG.iceServers, ...CONFIG.turnServers] 
-            }
-          };
-
-          const room = trysteroTorrent.joinRoom(config, this.roomId);
-          
-          // Set up room events
-          room.onPeerJoin((peerId) => {
-            this.handlePeerJoined('torrent', peerId);
-            this.sendHelloViaTrystero(room);
-          });
-
-          room.onPeerLeave((peerId) => {
-            this.handlePeerLeft(peerId);
-          });
-
-          // Set up actions
-          const [sendHello, onHello] = room.makeAction('hello');
-          const [sendState, onState] = room.makeAction('state');
-          const [sendPing, onPing] = room.makeAction('ping');
-
-          onHello((payload, peerId) => {
-            this.handlePeerJoined('torrent', peerId, payload);
-          });
-
-          onState((payload, peerId) => {
-            this.handleMessage(peerId, payload);
-          });
-
-          onPing((_, peerId) => {
-            const p = remotes.get(peerId);
-            if (p) p.lastHeardAt = performance.now();
-          });
-
-          // Store connection
-          this.activeConnections.set('torrent', {
-            room,
-            sendHello,
-            sendState,
-            sendPing,
-            sendAction: (action, data) => {
-              if (action === 'state' && sendState) sendState(data);
-            }
-          });
-
-          // Send initial hello
-          setTimeout(() => sendHello({
-            name: my.name,
-            color: my.color,
-            alive: my.alive
-          }), 500);
-
-          this.updateStrategyStatus('torrent', 'connected', '#22c55e');
-          return { strategy: 'torrent', room };
-        } catch (e) {
-          this.updateStrategyStatus('torrent', 'failed', '#ef4444');
-          console.error('Torrent strategy failed:', e);
-          return null;
-        }
-      }
-
-      async startTrysteroNostr() {
-        this.updateStrategyStatus('nostr', 'connecting', '#f59e0b');
-        
-        try {
-          const config = {
-            appId: CONFIG.appId,
-            rtcConfig: { iceServers: [...CONFIG.iceServers, ...CONFIG.turnServers] }
-          };
-
-          const room = trysteroNostr.joinRoom(config, this.roomId);
-          
-          room.onPeerJoin((peerId) => {
-            this.handlePeerJoined('nostr', peerId);
-          });
-
-          room.onPeerLeave((peerId) => {
-            this.handlePeerLeft(peerId);
-          });
-
-          const [sendHello, onHello] = room.makeAction('hello');
-          const [sendState, onState] = room.makeAction('state');
-
-          onHello((payload, peerId) => {
-            this.handlePeerJoined('nostr', peerId, payload);
-          });
-
-          onState((payload, peerId) => {
-            this.handleMessage(peerId, payload);
-          });
-
-          this.activeConnections.set('nostr', {
-            room,
-            sendHello,
-            sendState,
-            sendAction: (action, data) => {
-              if (action === 'state' && sendState) sendState(data);
-            }
-          });
-
-          setTimeout(() => sendHello({
-            name: my.name,
-            color: my.color,
-            alive: my.alive
-          }), 500);
-
-          this.updateStrategyStatus('nostr', 'connected', '#22c55e');
-          return { strategy: 'nostr', room };
-        } catch (e) {
-          this.updateStrategyStatus('nostr', 'failed', '#ef4444');
-          return null;
-        }
-      }
-
-      async startTrysteroMqtt() {
-        this.updateStrategyStatus('mqtt', 'connecting', '#f59e0b');
-        
-        try {
-          const config = {
-            appId: CONFIG.appId,
-            brokerUrl: CONFIG.mqttBrokers[0],
-            rtcConfig: { iceServers: [...CONFIG.iceServers, ...CONFIG.turnServers] }
-          };
-
-          const room = trysteroMqtt.joinRoom(config, this.roomId);
-          
-          room.onPeerJoin((peerId) => {
-            this.handlePeerJoined('mqtt', peerId);
-          });
-
-          room.onPeerLeave((peerId) => {
-            this.handlePeerLeft(peerId);
-          });
-
-          const [sendHello, onHello] = room.makeAction('hello');
-          const [sendState, onState] = room.makeAction('state');
-
-          onHello((payload, peerId) => {
-            this.handlePeerJoined('mqtt', peerId, payload);
-          });
-
-          onState((payload, peerId) => {
-            this.handleMessage(peerId, payload);
-          });
-
-          this.activeConnections.set('mqtt', {
-            room,
-            sendHello,
-            sendState,
-            sendAction: (action, data) => {
-              if (action === 'state' && sendState) sendState(data);
-            }
-          });
-
-          setTimeout(() => sendHello({
-            name: my.name,
-            color: my.color,
-            alive: my.alive
-          }), 500);
-
-          this.updateStrategyStatus('mqtt', 'connected', '#22c55e');
-          return { strategy: 'mqtt', room };
-        } catch (e) {
-          this.updateStrategyStatus('mqtt', 'failed', '#ef4444');
-          return null;
-        }
-      }
-
-      async startTrysteroFirebase() {
-        this.updateStrategyStatus('firebase', 'connecting', '#f59e0b');
-        
-        try {
-          const config = {
-            appId: CONFIG.appId,
-            firebaseConfig: CONFIG.firebaseConfig,
-            rtcConfig: { iceServers: [...CONFIG.iceServers, ...CONFIG.turnServers] }
-          };
-
-          const room = trysteroFirebase.joinRoom(config, this.roomId);
-          
-          room.onPeerJoin((peerId) => {
-            this.handlePeerJoined('firebase', peerId);
-          });
-
-          room.onPeerLeave((peerId) => {
-            this.handlePeerLeft(peerId);
-          });
-
-          const [sendHello, onHello] = room.makeAction('hello');
-          const [sendState, onState] = room.makeAction('state');
-
-          onHello((payload, peerId) => {
-            this.handlePeerJoined('firebase', peerId, payload);
-          });
-
-          onState((payload, peerId) => {
-            this.handleMessage(peerId, payload);
-          });
-
-          this.activeConnections.set('firebase', {
-            room,
-            sendHello,
-            sendState,
-            sendAction: (action, data) => {
-              if (action === 'state' && sendState) sendState(data);
-            }
-          });
-
-          setTimeout(() => sendHello({
-            name: my.name,
-            color: my.color,
-            alive: my.alive
-          }), 500);
-
-          this.updateStrategyStatus('firebase', 'connected', '#22c55e');
-          return { strategy: 'firebase', room };
-        } catch (e) {
-          this.updateStrategyStatus('firebase', 'failed', '#ef4444');
-          return null;
-        }
-      }
-
-      async startTrysteroIpfs() {
-        this.updateStrategyStatus('ipfs', 'connecting', '#f59e0b');
-        
-        try {
-          const config = {
-            appId: CONFIG.appId,
-            rtcConfig: { iceServers: [...CONFIG.iceServers, ...CONFIG.turnServers] }
-          };
-
-          const room = trysteroIpfs.joinRoom(config, this.roomId);
-          
-          room.onPeerJoin((peerId) => {
-            this.handlePeerJoined('ipfs', peerId);
-          });
-
-          room.onPeerLeave((peerId) => {
-            this.handlePeerLeft(peerId);
-          });
-
-          const [sendHello, onHello] = room.makeAction('hello');
-          const [sendState, onState] = room.makeAction('state');
-
-          onHello((payload, peerId) => {
-            this.handlePeerJoined('ipfs', peerId, payload);
-          });
-
-          onState((payload, peerId) => {
-            this.handleMessage(peerId, payload);
-          });
-
-          this.activeConnections.set('ipfs', {
-            room,
-            sendHello,
-            sendState,
-            sendAction: (action, data) => {
-              if (action === 'state' && sendState) sendState(data);
-            }
-          });
-
-          setTimeout(() => sendHello({
-            name: my.name,
-            color: my.color,
-            alive: my.alive
-          }), 500);
-
-          this.updateStrategyStatus('ipfs', 'connected', '#22c55e');
-          return { strategy: 'ipfs', room };
-        } catch (e) {
-          this.updateStrategyStatus('ipfs', 'failed', '#ef4444');
-          return null;
-        }
-      }
-
-      async startP2PT() {
-        this.updateStrategyStatus('p2pt', 'connecting', '#f59e0b');
-        
-        try {
-          // P2PT uses WebTorrent trackers for signaling
-          const P2PT = window.P2PT;
-          if (!P2PT) throw new Error('P2PT not loaded');
-
-          const p2pt = new P2PT(my.id, [CONFIG.p2ptTracker]);
-          
-          p2pt.on('peerconnect', (peer, peerId) => {
-            this.handlePeerJoined('p2pt', peerId);
-            
-            peer.on('data', (data) => {
-              try {
-                const msg = JSON.parse(data.toString());
-                if (msg.type === 'state') {
-                  this.handleMessage(peerId, msg.data);
-                } else if (msg.type === 'hello') {
-                  this.handlePeerJoined('p2pt', peerId, msg.data);
-                }
-              } catch (e) {}
-            });
-          });
-
-          p2pt.on('disconnect', (peerId) => {
-            this.handlePeerLeft(peerId);
-          });
-
-          // Announce to tracker
-          await p2pt.start();
-
-          this.activeConnections.set('p2pt', {
-            p2pt,
-            sendToAll: (data) => p2pt.sendAll(data)
-          });
-
-          // Broadcast hello
-          setTimeout(() => {
-            p2pt.sendAll(JSON.stringify({
-              type: 'hello',
-              data: {
-                name: my.name,
-                color: my.color,
-                alive: my.alive
-              }
-            }));
-          }, 1000);
-
-          this.updateStrategyStatus('p2pt', 'connected', '#22c55e');
-          return { strategy: 'p2pt', p2pt };
-        } catch (e) {
-          this.updateStrategyStatus('p2pt', 'failed', '#ef4444');
-          return null;
-        }
-      }
-
-      async startPeerJS() {
-        this.updateStrategyStatus('peerjs', 'connecting', '#f59e0b');
-        
-        try {
-          const Peer = window.Peer;
-          if (!Peer) throw new Error('PeerJS not loaded');
-
-          const peer = new Peer(my.id, {
-            host: CONFIG.peerjsHost,
-            port: CONFIG.peerjsPort,
-            path: CONFIG.peerjsPath,
-            config: { iceServers: [...CONFIG.iceServers, ...CONFIG.turnServers] },
-            debug: 0
-          });
-
-          peer.on('open', (id) => {
-            this.updateStrategyStatus('peerjs', 'connected', '#22c55e');
-          });
-
-          peer.on('connection', (conn) => {
-            conn.on('open', () => {
-              this.handlePeerJoined('peerjs', conn.peer);
-              
-              conn.on('data', (data) => {
-                try {
-                  const msg = JSON.parse(data);
-                  if (msg.type === 'state') {
-                    this.handleMessage(conn.peer, msg.data);
-                  }
-                } catch (e) {}
-              });
-            });
-
-            conn.on('close', () => {
-              this.handlePeerLeft(conn.peer);
-            });
-          });
-
-          peer.on('disconnected', () => {
-            peer.reconnect();
-          });
-
-          this.activeConnections.set('peerjs', peer);
-
-          return { strategy: 'peerjs', peer };
-        } catch (e) {
-          this.updateStrategyStatus('peerjs', 'failed', '#ef4444');
-          return null;
-        }
-      }
-
-      async startSimplePeer() {
-        this.updateStrategyStatus('simplepeer', 'connecting', '#f59e0b');
-        
-        try {
-          const SimplePeer = window.SimplePeer;
-          if (!SimplePeer) throw new Error('SimplePeer not loaded');
-
-          // SimplePeer requires a signaling server - we'll use the public one
-          // For simplicity, we'll rely on other strategies for discovery
-          // and create peers when needed
-          
-          this.activeConnections.set('simplepeer', new Map());
-          
-          this.updateStrategyStatus('simplepeer', 'standby', '#94a3b8');
-          return { strategy: 'simplepeer' };
-        } catch (e) {
-          this.updateStrategyStatus('simplepeer', 'failed', '#ef4444');
-          return null;
-        }
-      }
-
-      sendHelloViaTrystero(room) {
-        try {
-          const [sendHello] = room.makeAction('hello');
-          sendHello({
-            name: my.name,
-            color: my.color,
-            alive: my.alive
-          });
-        } catch (e) {}
-      }
-
-      shutdown() {
-        for (const [strategy, conn] of this.activeConnections) {
-          try {
-            if (conn && conn.close) conn.close();
-            if (conn && conn.destroy) conn.destroy();
-            if (conn && conn.leave) conn.leave();
-          } catch (e) {}
-        }
-        this.activeConnections.clear();
-        this.strategyStatus.clear();
-        this.bestStrategy = null;
+  } catch {}
+
+  if (!sessionStorage.getItem(STARTUP_RELOAD_FLAG)) {
+    sessionStorage.setItem(STARTUP_RELOAD_FLAG, "1");
+    window.location.replace(noCacheUrl(window.location.href));
+    return false;
+  }
+  return true;
+}
+
+/* =========================================================
+   INTERNAL SEED DISCOVERY (hidden in UI)
+========================================================= */
+function createSourceState(){
+  return { latestValue:"", lastChosenValue:"", previousValues:[], blacklist:[] };
+}
+function createTokenMeta(){
+  return {
+    sources: { puter:createSourceState() },
+    effectiveValue: "",
+    fetchedAt: 0,
+    lastSourceUsed: "",
+    lastReason: ""
+  };
+}
+function getTokenMeta(tokenName){
+  if (!GITHUB_FETCH.byToken[tokenName]) GITHUB_FETCH.byToken[tokenName] = createTokenMeta();
+  return GITHUB_FETCH.byToken[tokenName];
+}
+function pushUniqueFront(arr, value, max=3){
+  if (!value) return arr || [];
+  const next = [value, ...(arr || []).filter(v => v !== value)];
+  return next.slice(0, max);
+}
+function markSourceSeen(tokenName, value){
+  const st = getTokenMeta(tokenName).sources.puter;
+  st.latestValue = value;
+  st.previousValues = pushUniqueFront(st.previousValues, value, 3);
+}
+function markSourceChosen(tokenName, value){
+  const st = getTokenMeta(tokenName).sources.puter;
+  st.lastChosenValue = value;
+}
+function buildGithubUrls(owner, repo, branch, path){
+  return { blobUrl: `https://github.com/${owner}/${repo}/blob/${branch}/${path}` };
+}
+function extractUrlFromTokenText(txt){
+  const s = String(txt || "").trim();
+  if (/^https?:\/\//i.test(s)) return s;
+  try {
+    const j = JSON.parse(s);
+    if (j && typeof j === "object") {
+      if (typeof j.url === "string" && /^https?:\/\//i.test(j.url.trim())) return j.url.trim();
+      const stack = [j];
+      while (stack.length) {
+        const cur = stack.pop();
+        if (!cur) continue;
+        if (typeof cur === "string" && /^https?:\/\//i.test(cur.trim())) return cur.trim();
+        if (Array.isArray(cur)) stack.push(...cur);
+        else if (typeof cur === "object") stack.push(...Object.values(cur));
       }
     }
-
-    // ==================== GAME STATE MANAGER ====================
-    class GameManager {
-      constructor(strategyManager) {
-        this.strategyManager = strategyManager;
-        this.setupCallbacks();
-      }
-
-      setupCallbacks() {
-        this.strategyManager.on('peerJoin', (peerId) => {
-          renderPeersList();
-        });
-
-        this.strategyManager.on('peerLeave', (peerId) => {
-          renderPeersList();
-        });
-
-        this.strategyManager.onMessage((peerId, data) => {
-          this.handlePeerState(peerId, data);
-        });
-      }
-
-      handlePeerState(peerId, data) {
-        let p = remotes.get(peerId);
-        if (!p) {
-          p = {
-            peerId,
-            name: data.name || peerId.slice(0, 6),
-            color: data.color || '#8ad',
-            x: WORLD.w/2,
-            y: WORLD.h/2,
-            r: 22,
-            alive: true,
-            lastHeardAt: performance.now(),
-            lastSeq: -1
-          };
-          remotes.set(peerId, p);
-        }
-
-        const seq = data.seq ?? 0;
-        if (seq <= (p.lastSeq ?? -1)) return;
-        
-        p.lastSeq = seq;
-        p.lastHeardAt = performance.now();
-        p.x = data.x; p.y = data.y;
-        p.vx = data.vx || 0; p.vy = data.vy || 0;
-        p.r = data.r;
-        p.alive = data.alive !== false;
-        p.name = data.name || p.name;
-        p.color = data.color || p.color;
-
-        renderPeersList();
-      }
-
-      broadcastMyState() {
-        const now = performance.now();
-        if (now - my.lastSentAt > 66) {
-          my.lastSentAt = now;
-          my.seq++;
-          
-          const state = {
-            name: my.name,
-            color: my.color,
-            x: my.x,
-            y: my.y,
-            vx: my.vx,
-            vy: my.vy,
-            r: my.r,
-            alive: my.alive,
-            seq: my.seq,
-            t: Date.now()
-          };
-          
-          this.strategyManager.broadcast(state);
-        }
-      }
-
-      cleanupStalePeers() {
-        const now = performance.now();
-        for (const [peerId, p] of remotes.entries()) {
-          if (now - (p.lastHeardAt || 0) > 8000) {
-            remotes.delete(peerId);
-          }
-        }
-      }
-    }
-
-    // ==================== GAME MECHANICS ====================
-    let mouse = { x: window.innerWidth/2, y: window.innerHeight/2 };
-    window.addEventListener('mousemove', (e) => { mouse.x = e.clientX; mouse.y = e.clientY; });
-
-    function respawn(msg) {
-      my.alive = true;
-      my.r = 26;
-      my.x = WORLD.w * (0.2 + Math.random() * 0.6);
-      my.y = WORLD.h * (0.2 + Math.random() * 0.6);
-      my.vx = 0;
-      my.vy = 0;
-      
-      // Broadcast respawn
-      strategyManager.broadcast({
-        name: my.name,
-        color: my.color,
-        x: my.x,
-        y: my.y,
-        r: my.r,
-        alive: my.alive,
-        seq: my.seq++
-      });
-      
-      toast(msg || 'Respawned', 1500, 'success');
-    }
-
-    function tryEatPellets() {
-      if (!my.alive) return;
-      const eatRadius = my.r * 0.9;
-      for (const pel of pellets) {
-        if (removedPellets.has(pel.id)) continue;
-        const d = Math.hypot(pel.x - my.x, pel.y - my.y);
-        if (d < eatRadius) {
-          removedPellets.add(pel.id);
-          my.r += pel.r * 0.18;
-          
-          // Broadcast pellet eaten
-          strategyManager.broadcast({
-            type: 'pellet',
-            id: pel.id,
-            t: Date.now()
-          });
-        }
-      }
-    }
-
-    function tryEatPlayers() {
-      if (!my.alive) return;
-      for (const [peerId, p] of remotes.entries()) {
-        if (!p.alive) continue;
-        const theirR = p.r || 0;
-        if (my.r < theirR * 1.15) continue;
-        const d = Math.hypot((p.x||0) - my.x, (p.y||0) - my.y);
-        if (d < my.r * 0.85) {
-          my.r += theirR * 0.35;
-          p.alive = false;
-          
-          // Broadcast player eaten
-          strategyManager.broadcast({
-            type: 'playerEaten',
-            loserPeerId: peerId,
-            winnerId: my.id
-          });
-          
-          toast(`🍽️ You ate ${p.name || peerId.slice(0,6)}!`, 1500, 'success');
-          renderPeersList();
-        }
-      }
-    }
-
-    function updateRemotes(dt) {
-      for (const p of remotes.values()) {
-        if (!p.alive) continue;
-        p.x = clamp((p.x||0) + (p.vx||0) * dt, 0, WORLD.w);
-        p.y = clamp((p.y||0) + (p.vy||0) * dt, 0, WORLD.h);
-      }
-    }
-
-    // ==================== RENDERING ====================
-    function drawPlayer(x, y, r, color, label, isMe) {
-      ctx.beginPath();
-      
-      // Glow effect
-      ctx.shadowColor = isMe ? 'rgba(255,255,255,0.5)' : color;
-      ctx.shadowBlur = isMe ? 20 : 10;
-      
-      ctx.fillStyle = color || '#8ad';
-      ctx.arc(x, y, r, 0, Math.PI * 2);
-      ctx.fill();
-      
-      ctx.shadowBlur = 0;
-      ctx.lineWidth = isMe ? 3 : 2;
-      ctx.strokeStyle = isMe ? 'rgba(255,255,255,0.8)' : 'rgba(0,0,0,0.4)';
-      ctx.stroke();
-      
-      ctx.font = `${Math.max(12, Math.min(18, r * 0.55))}px system-ui, -apple-system, sans-serif`;
-      ctx.fillStyle = 'rgba(255,255,255,0.95)';
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText(label, x, y);
-    }
-
-    function draw() {
-      const w = window.innerWidth, h = window.innerHeight;
-      const camX = my.x - w/2, camY = my.y - h/2;
-
-      ctx.clearRect(0, 0, w, h);
-      ctx.fillStyle = '#0b0f14';
-      ctx.fillRect(0, 0, w, h);
-
-      ctx.save();
-      ctx.translate(-camX, -camY);
-
-      // Grid
-      ctx.globalAlpha = 0.15;
-      ctx.strokeStyle = '#7aa0d0';
-      ctx.lineWidth = 1;
-      for (let x = 0; x <= WORLD.w; x += 150) {
-        ctx.beginPath();
-        ctx.moveTo(x, 0);
-        ctx.lineTo(x, WORLD.h);
-        ctx.stroke();
-      }
-      for (let y = 0; y <= WORLD.h; y += 150) {
-        ctx.beginPath();
-        ctx.moveTo(0, y);
-        ctx.lineTo(WORLD.w, y);
-        ctx.stroke();
-      }
-      ctx.globalAlpha = 1;
-
-      // Pellets
-      for (const pel of pellets) {
-        if (removedPellets.has(pel.id)) continue;
-        ctx.beginPath();
-        ctx.fillStyle = '#5eead4';
-        ctx.arc(pel.x, pel.y, pel.r, 0, Math.PI * 2);
-        ctx.fill();
-      }
-
-      // Remote players
-      for (const [peerId, p] of remotes.entries()) {
-        if (!p.alive) continue;
-        drawPlayer(p.x||0, p.y||0, p.r||22, p.color, p.name || peerId.slice(0,6), false);
-      }
-      
-      // Local player
-      if (my.alive) {
-        drawPlayer(my.x, my.y, my.r, my.color, my.name, true);
-      }
-
-      // World border
-      ctx.strokeStyle = 'rgba(255,255,255,0.2)';
-      ctx.lineWidth = 4;
-      ctx.strokeRect(0, 0, WORLD.w, WORLD.h);
-
-      ctx.restore();
-    }
-
-    function renderPeersList() {
-      const items = [{ label: `${my.name} (you)`, detail: `r=${my.r.toFixed(0)}` }];
-      
-      for (const [peerId, p] of remotes.entries()) {
-        const name = p.name || peerId.slice(0, 6);
-        const alive = p.alive !== false;
-        const strategy = p.strategy ? ` via ${p.strategy}` : '';
-        items.push({ 
-          label: `${name}${alive ? '' : ' 💀'}`, 
-          detail: `r=${(p.r || 0).toFixed(0)}${strategy}` 
-        });
-      }
-      
-      UI.peers.innerHTML = items
-        .sort((a, b) => b.detail.localeCompare(a.detail))
-        .map(x => `<li><span>${escapeHtml(x.label)}</span><span class="tag">${escapeHtml(x.detail)}</span></li>`)
-        .join('');
-      
-      UI.meshBadge.textContent = `Mesh: ${remotes.size} peers`;
-      UI.meshBadge.className = `pill ${remotes.size > 0 ? 'success' : 'warn'}`;
-      
-      // Update discovery status
-      if (strategyManager) strategyManager.updateDiscoveryStatus();
-    }
-
-    // ==================== ANIMATION LOOP ====================
-    let last = performance.now();
-    
-    function tick(now) {
-      const dt = Math.min(0.05, (now - last) / 1000);
-      last = now;
-
-      if (my.alive) {
-        const w = window.innerWidth, h = window.innerHeight;
-        const targetX = my.x + (mouse.x - w/2);
-        const targetY = my.y + (mouse.y - h/2);
-        const dx = targetX - my.x, dy = targetY - my.y;
-        const d = Math.hypot(dx, dy) || 1;
-        const maxSpeed = 320 / Math.sqrt(my.r);
-        const ax = (dx / d) * maxSpeed;
-        const ay = (dy / d) * maxSpeed;
-        
-        my.vx = my.vx * 0.82 + ax * 0.18;
-        my.vy = my.vy * 0.82 + ay * 0.18;
-        my.x = clamp(my.x + my.vx * dt, 0, WORLD.w);
-        my.y = clamp(my.y + my.vy * dt, 0, WORLD.h);
-      }
-
-      tryEatPellets();
-      tryEatPlayers();
-      updateRemotes(dt);
-
-      if (gameManager) {
-        gameManager.broadcastMyState();
-        gameManager.cleanupStalePeers();
-      }
-
-      draw();
-      requestAnimationFrame(tick);
-    }
-
-    // ==================== INITIALIZATION ====================
-    let strategyManager, gameManager;
-
-    async function init(roomId) {
-      // Clean up old connections
-      if (strategyManager) {
-        strategyManager.shutdown();
-      }
-
-      remotes.clear();
-      renderPeersList();
-      rebuildPellets(roomId);
-      
-      my.name = UI.name.value.trim().slice(0, 18);
-      my.color = randomColor();
-
-      UI.status.textContent = 'Starting multi-strategy connections...';
-      
-      strategyManager = new MultiStrategyManager();
-      gameManager = new GameManager(strategyManager);
-      
-      strategyManager.init(roomId);
-    }
-
-    // ==================== EVENT LISTENERS ====================
-    UI.apply.addEventListener('click', () => {
-      const n = UI.name.value.trim().slice(0, 18);
-      my.name = n;
-      localStorage.setItem('p2pAgarName', n);
-      toast('Name updated', 1000, 'success');
-      
-      // Broadcast name update
-      if (strategyManager) {
-        strategyManager.broadcast({
-          name: my.name,
-          color: my.color,
-          type: 'nameUpdate'
-        });
-      }
-    });
-
-    UI.rejoin.addEventListener('click', () => {
-      const roomId = UI.room.value.trim();
-      location.hash = 'room=' + encodeURIComponent(roomId);
-      init(roomId);
-      toast(`Joining room: ${roomId}`, 1500);
-    });
-
-    UI.forceRespawn.addEventListener('click', () => {
-      respawn('Respawned');
-    });
-
-    UI.copyDebug.addEventListener('click', async () => {
-      const text = 
-        `Room: ${UI.room.value}\n` +
-        `Active Strategy: ${strategyManager?.bestStrategy || 'none'}\n` +
-        `Peers: ${remotes.size}\n\n` +
-        `Strategy Status:\n${UI.signalingStatus.value}\n\n` +
-        `Active Peers:\n${UI.discoveryStatus.value}`;
-      
+  } catch {}
+  const m = s.match(/https?:\/\/[^\s"']+/i);
+  return m ? m[0] : "";
+}
+function validateSeedUrl(rawText){
+  const candidate = extractUrlFromTokenText(rawText);
+  const normalized = String(candidate || "").trim().replace(/^["']|["']$/g, "").replace(/\/+$/, "");
+  let u;
+  try { u = new URL(normalized); } catch { throw new Error("Invalid URL"); }
+  if (!/^https?:$/.test(u.protocol)) throw new Error("Invalid URL");
+  return normalized;
+}
+function extractGitHubBlobText(html){
+  const doc = new DOMParser().parseFromString(html, "text/html");
+  let out = "";
+  for (const s of doc.querySelectorAll("script")) {
+    const t = s.textContent || "";
+    const rawLines = t.match(/"rawLines"\s*:\s*(\[[\s\S]*?\])/);
+    if (rawLines) {
       try {
-        await navigator.clipboard.writeText(text);
-        toast('Debug info copied', 1000, 'success');
-      } catch {
-        toast('Failed to copy', 1000, 'error');
-      }
-    });
-
-    UI.refreshStrategies.addEventListener('click', () => {
-      init(UI.room.value.trim());
-      toast('Restarting all strategies...', 1500);
-    });
-
-    // Keyboard shortcuts
-    window.addEventListener('keydown', (e) => {
-      if (e.key.toLowerCase() === 'r') {
-        e.preventDefault();
-        respawn('Respawned');
-      }
-    });
-
-    // ==================== BOOT ====================
-    (async function boot() {
-      const roomId = UI.room.value.trim();
-      await init(roomId);
-      requestAnimationFrame(tick);
-      
-      // Periodic status updates
-      setInterval(() => {
-        if (strategyManager) {
-          strategyManager.updateDiscoveryStatus();
+        const lines = JSON.parse(rawLines[1]);
+        if (Array.isArray(lines)) {
+          out = lines.join("\n").trim();
+          if (out) return out;
         }
-      }, 2000);
-    })();
-  </script>
+      } catch {}
+    }
+  }
+  const el =
+    doc.querySelector('[data-testid="read-only-cursor-text-area"]') ||
+    doc.querySelector('.react-blob-textarea') ||
+    doc.querySelector('.blob-code-inner') ||
+    doc.querySelector('.blob-code');
+  if (el) out = (el.value || el.textContent || "").trim();
+  return out || "";
+}
+async function fetchGithubFilePuter(blobUrl){
+  if (!window.puter?.net?.fetch) throw new Error("No network");
+  const res = await puter.net.fetch(noCacheUrl(blobUrl), {
+    headers: {
+      "User-Agent":"Mozilla/5.0",
+      "Accept":"text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+      "Cache-Control":"no-cache"
+    }
+  });
+  if (!res.ok) throw new Error("No result");
+  const html = await res.text();
+  const txt = extractGitHubBlobText(html).trim();
+  if (!txt) throw new Error("No result");
+  return txt;
+}
+async function fetchTokenUrlPuterOnly(owner, repo, branch, tokenName){
+  const urls = buildGithubUrls(owner, repo, branch, tokenName);
+  const rawText = await fetchGithubFilePuter(urls.blobUrl);
+  const url = validateSeedUrl(rawText);
+
+  markSourceSeen(tokenName, url);
+  const meta = getTokenMeta(tokenName);
+  const prevEffective = meta.effectiveValue || "";
+  meta.effectiveValue = url;
+  meta.fetchedAt = Date.now();
+  meta.lastSourceUsed = "puter";
+  meta.lastReason = "puter_only";
+  markSourceChosen(tokenName, url);
+
+  return {
+    tokenName,
+    url,
+    sourceUsed: "puter",
+    changed: !!prevEffective && prevEffective !== url,
+    previousValue: prevEffective || null
+  };
+}
+async function helloSeed(url){
+  const base = String(url || "").replace(/\/+$/,"");
+  const t0 = performance.now();
+  const j = await fetchJson(noCacheUrl(base + "/api/node/hello"));
+  const latency = Math.round(performance.now() - t0);
+  return {
+    url: base,
+    latency_ms: latency,
+    node_id: j?.node?.node_id || null,
+    peers_online: j?.node?.peers_online ?? null,
+    raw: j
+  };
+}
+async function scanSeedsOnce(){
+  const { owner, repo, branch } = REPO_CFG;
+  const found = [];
+  let missStreak = 0;
+
+  for (let i = 1; i <= TOKEN_SCAN_MAX; i++) {
+    const tokenName = `token${i}`;
+    try {
+      const tok = await fetchTokenUrlPuterOnly(owner, repo, branch, tokenName);
+      const hello = await helloSeed(tok.url);
+      found.push({
+        token_name: tokenName,
+        token_index: i,
+        ...hello
+      });
+      missStreak = 0;
+    } catch {
+      missStreak++;
+      if (missStreak >= TOKEN_SCAN_STOP_AFTER_CONSECUTIVE_MISSES) break;
+    }
+  }
+  return found;
+}
+async function startSeedScanLoop(){
+  if (STATE.tokenScan.running) return;
+  STATE.tokenScan.running = true;
+
+  (async () => {
+    while (STATE.tokenScan.running) {
+      try {
+        const results = await scanSeedsOnce();
+        const dedup = new Map();
+        for (const n of results.sort((a,b)=>a.latency_ms-b.latency_ms)) {
+          const key = (n.node_id || "") ? `id:${n.node_id}` : `url:${n.url}`;
+          if (!dedup.has(key)) dedup.set(key, n);
+        }
+        const unique = Array.from(dedup.values()).sort((a,b)=>a.latency_ms-b.latency_ms);
+        STATE.seeds = unique;
+        STATE.connectedSeeds = unique.slice(0, MAX_CONNECTED_SEEDS);
+
+        updateMiniStats();
+        if (STATE.connectedSeeds.length) {
+          setStatus("netStatus", `Connected to ${STATE.connectedSeeds.length} seed(s)`, "ok");
+        } else {
+          setStatus("netStatus", `Disconnected`, "warn");
+        }
+
+        if (STATE.online) {
+          startAllPollLoops();
+          await sendHeartbeatAll();
+        }
+      } catch {
+        setStatus("netStatus", "Disconnected", "err");
+      }
+
+      await sleep(TOKEN_SCAN_BACKOFF_MS);
+    }
+  })();
+}
+function stopSeedScanLoop(){ STATE.tokenScan.running = false; }
+
+async function discoverSeeds(){
+  const results = await scanSeedsOnce();
+  const dedup = new Map();
+  for (const n of results.sort((a,b)=>a.latency_ms-b.latency_ms)) {
+    const key = (n.node_id || "") ? `id:${n.node_id}` : `url:${n.url}`;
+    if (!dedup.has(key)) dedup.set(key, n);
+  }
+  const unique = Array.from(dedup.values()).sort((a,b)=>a.latency_ms-b.latency_ms);
+  STATE.seeds = unique;
+  STATE.connectedSeeds = unique.slice(0, MAX_CONNECTED_SEEDS);
+
+  updateMiniStats();
+  if (STATE.connectedSeeds.length) setStatus("netStatus", `Connected to ${STATE.connectedSeeds.length} seed(s)`, "ok");
+  else setStatus("netStatus", "Disconnected", "warn");
+}
+
+/* =========================================================
+   NETWORK / HEARTBEAT
+========================================================= */
+async function postToSeed(seedUrl, path, body){
+  return await fetchJson(noCacheUrl(seedUrl.replace(/\/+$/,"") + path), {
+    method:"POST",
+    headers:{ "Content-Type":"application/json" },
+    body: JSON.stringify(body)
+  });
+}
+async function getFromSeed(seedUrl, path){
+  return await fetchJson(noCacheUrl(seedUrl.replace(/\/+$/,"") + path));
+}
+
+async function sendHeartbeatToSeed(seed){
+  return await postToSeed(seed.url, "/api/peer/heartbeat", {
+    peer_id: STATE.peerId,
+    display_name: STATE.identity || STATE.peerId,
+    signaling_url: "",
+    capabilities: {
+      webrtc: true,
+      audio: true,
+      video: true,
+      chat: true,
+      file_transfer: true,
+      datachannel: true
+    }
+  });
+}
+
+async function sendHeartbeatAll(){
+  if (!STATE.online || !STATE.connectedSeeds.length) return;
+
+  const nextConnected = [];
+  const merged = new Map();
+
+  await Promise.all(STATE.connectedSeeds.map(async (seed) => {
+    try {
+      const j = await sendHeartbeatToSeed(seed);
+      nextConnected.push(seed);
+
+      const peers = Array.isArray(j?.peers) ? j.peers : [];
+      for (const p of peers) {
+        if (!p || p.peer_id === STATE.peerId) continue;
+
+        const existing = merged.get(p.peer_id);
+        if (!existing) {
+          merged.set(p.peer_id, {
+            peer_id: p.peer_id,
+            display_name: p.display_name || p.peer_id,
+            online: p.online !== false,
+            seed_urls: [seed.url],
+            seeds_count: 1,
+            last_seen: Date.now()
+          });
+        } else {
+          existing.seed_urls = Array.from(new Set([...(existing.seed_urls || []), seed.url]));
+          existing.seeds_count = existing.seed_urls.length;
+          if (!existing.display_name && p.display_name) existing.display_name = p.display_name;
+          existing.online = existing.online || (p.online !== false);
+          existing.last_seen = Date.now();
+        }
+      }
+    } catch {}
+  }));
+
+  if (!nextConnected.length) {
+    setStatus("netStatus", "Disconnected", "err");
+    return;
+  }
+
+  STATE.connectedSeeds = nextConnected;
+  STATE.peersById = merged;
+  updateMiniStats();
+  renderPeers();
+
+  const loopUrls = new Set([...STATE.seedPollLoops.keys()]);
+  const seedUrls = new Set(STATE.connectedSeeds.map(n => n.url));
+  const loopsMismatch = loopUrls.size !== seedUrls.size || [...loopUrls].some(u => !seedUrls.has(u));
+  if (loopsMismatch && STATE.online) startAllPollLoops();
+}
+
+async function startHeartbeatLoop(){
+  if (STATE.heartbeatTimer) clearInterval(STATE.heartbeatTimer);
+  await sendHeartbeatAll();
+  STATE.heartbeatTimer = setInterval(sendHeartbeatAll, HEARTBEAT_MS);
+}
+function stopHeartbeatLoop(){
+  if (STATE.heartbeatTimer) clearInterval(STATE.heartbeatTimer);
+  STATE.heartbeatTimer = null;
+}
+
+async function autoLogin(force=false){
+  try {
+    ensureIdentity();
+    if (!STATE.connectedSeeds.length || force) {
+      await discoverSeeds();
+    }
+
+    STATE.online = true;
+    saveStoredIdentity();
+    await startHeartbeatLoop();
+    startAllPollLoops();
+
+    setStatus("idStatus", `Online as ${STATE.identity}`, "ok");
+    if (STATE.connectedSeeds.length) setStatus("netStatus", `Connected to ${STATE.connectedSeeds.length} seed(s)`, "ok");
+    else setStatus("netStatus", "Disconnected", "warn");
+
+    updateHeaderPills();
+    addSystemMessage(`You are online as ${STATE.peerId}(${STATE.identity})`);
+  } catch {
+    STATE.online = false;
+    setStatus("idStatus", "Offline", "err");
+  }
+}
+
+async function logoutAll(){
+  STATE.online = false;
+  stopHeartbeatLoop();
+  stopAllPollLoops();
+
+  STATE.peersById = new Map();
+  STATE.selectedPeer = "";
+  renderPeers();
+  updateMiniStats();
+
+  await stopPc(true);
+
+  setStatus("idStatus", "Offline", "warn");
+  setStatus("netStatus", STATE.connectedSeeds.length ? `Connected to ${STATE.connectedSeeds.length} seed(s)` : "Disconnected", STATE.connectedSeeds.length ? "ok" : "warn");
+  addSystemMessage("You are offline");
+}
+
+/* =========================================================
+   PEERS UI
+========================================================= */
+function renderPeers(){
+  const q = ($("peerSearch").value || "").trim().toLowerCase();
+  const arr = Array.from(STATE.peersById.values())
+    .filter(p => {
+      if (!q) return true;
+      return (p.peer_id || "").toLowerCase().includes(q) || (p.display_name || "").toLowerCase().includes(q);
+    })
+    .sort((a,b) => (a.display_name || a.peer_id).localeCompare(b.display_name || b.peer_id));
+
+  const el = $("peerList");
+  if (!arr.length){
+    el.innerHTML = `<div class="muted">No peers found.</div>`;
+    updateHeaderPills();
+    return;
+  }
+
+  el.innerHTML = "";
+  for (const p of arr) {
+    const d = document.createElement("div");
+    d.className = "peer" + (STATE.selectedPeer === p.peer_id ? " active" : "");
+    d.onclick = () => {
+      STATE.selectedPeer = p.peer_id;
+      renderPeers();
+      updateHeaderPills();
+      addSystemMessage(`Selected peer ${p.peer_id}(${p.display_name || p.peer_id})`);
+    };
+    d.innerHTML = `
+      <div style="min-width:0">
+        <div class="name">${escapeHtml(p.peer_id)} <span style="color:#94a3b8;font-weight:500">(${escapeHtml(p.display_name || p.peer_id)})</span></div>
+        <div class="sub">${p.seeds_count || 1} seed(s)</div>
+      </div>
+      <span class="badge">${p.online ? "online" : "offline"}</span>
+    `;
+    el.appendChild(d);
+  }
+
+  updateHeaderPills();
+}
+
+async function refreshPeersNow(){
+  try { await sendHeartbeatAll(); }
+  catch { setStatus("netStatus", "Disconnected", "err"); }
+}
+
+/* =========================================================
+   POLLING / SIGNALING
+========================================================= */
+function startAllPollLoops(){
+  stopAllPollLoops();
+  for (const seed of STATE.connectedSeeds) startSeedPollLoop(seed.url);
+}
+function stopAllPollLoops(){
+  for (const [url, ctrl] of STATE.seedPollLoops.entries()) ctrl.running = false;
+  STATE.seedPollLoops.clear();
+}
+function startSeedPollLoop(seedUrl){
+  if (STATE.seedPollLoops.has(seedUrl)) return;
+  const ctrl = { running:true };
+  STATE.seedPollLoops.set(seedUrl, ctrl);
+
+  (async () => {
+    while (ctrl.running) {
+      if (!STATE.online) { await sleep(500); continue; }
+      try {
+        const j = await getFromSeed(seedUrl, `/api/peer/poll?peer_id=${encodeURIComponent(STATE.peerId)}&timeout=20`);
+        const events = Array.isArray(j?.events) ? j.events : [];
+        for (const ev of events) {
+          ev.__seed_url = seedUrl;
+          await handleEvent(ev);
+        }
+      } catch {
+        await sleep(700);
+      }
+    }
+  })();
+}
+
+async function signalSeedRequest(path, body, preferredSeedUrl){
+  const candidates = [];
+  if (preferredSeedUrl) {
+    const p = STATE.connectedSeeds.find(n => n.url === preferredSeedUrl);
+    if (p) candidates.push(p);
+  }
+  for (const n of STATE.connectedSeeds) {
+    if (!candidates.find(x => x.url === n.url)) candidates.push(n);
+  }
+
+  let lastErr = null;
+  for (const n of candidates) {
+    try {
+      const data = await postToSeed(n.url, path, body);
+      return { seedUrl:n.url, data };
+    } catch (e) { lastErr = e; }
+  }
+  throw lastErr || new Error("No connection");
+}
+
+/* =========================================================
+   CALL / CONNECT ACTIONS
+========================================================= */
+async function connectSelectedData(){
+  await dialPeer("data");
+}
+async function dialSelectedMedia(){
+  await dialPeer("media");
+}
+
+async function dialPeer(mode){
+  try {
+    if (!STATE.online) throw new Error("offline");
+    if (!STATE.selectedPeer) throw new Error("select");
+    if (STATE.selectedPeer === STATE.peerId) throw new Error("self");
+    if (STATE.activeCallId) throw new Error("busy");
+    if (!STATE.connectedSeeds.length) throw new Error("no seeds");
+
+    if (mode === "media") await ensureMedia();
+
+    STATE.outgoingRequestedMode = mode;
+
+    const r = await signalSeedRequest("/api/peer/invite", {
+      caller: STATE.peerId,
+      callee: STATE.selectedPeer,
+      session_kind: mode // harmless if server ignores
+    });
+
+    STATE.activeSeedUrl = r.seedUrl;
+    STATE.activeCallId = r.data?.call_id || r.data?.call?.id || "";
+    STATE.activePeer = STATE.selectedPeer;
+    STATE.sessionMode = "connecting";
+    updateHeaderPills();
+
+    setStatus("idStatus", mode === "media" ? "Calling…" : "Connecting…", "ok");
+    addSystemMessage(`${mode === "media" ? "Calling" : "Connecting to"} ${STATE.selectedPeer}`);
+  } catch {
+    setStatus("idStatus", "Could not connect", "err");
+  }
+}
+
+async function acceptIncoming(mode="data"){
+  try {
+    if (!STATE.incomingCall) throw new Error("none");
+    if (mode === "media") await ensureMedia();
+
+    const ev = STATE.incomingCall;
+    const seedUrl = ev.__seed_url || STATE.connectedSeeds[0]?.url;
+
+    await postToSeed(seedUrl, "/api/peer/respond", {
+      peer_id: STATE.peerId,
+      call_id: ev.call_id,
+      action: "accept"
+    });
+
+    STATE.activeCallId = ev.call_id;
+    STATE.activePeer = ev.from;
+    STATE.activeSeedUrl = seedUrl;
+    STATE.sessionMode = mode;
+    updateHeaderPills();
+
+    await createPc(true, ev.call_id, ev.from, mode);
+    STATE.incomingCall = null;
+    renderIncomingBar();
+
+    setStatus("idStatus", mode === "media" ? "Call accepted" : "Chat connected", "ok");
+    addSystemMessage(`${mode === "media" ? "Call" : "Chat"} accepted with ${ev.from}`);
+  } catch {
+    setStatus("idStatus", "Could not accept", "err");
+  }
+}
+
+async function rejectIncoming(){
+  try {
+    if (!STATE.incomingCall) throw new Error("none");
+    const ev = STATE.incomingCall;
+    const seedUrl = ev.__seed_url || STATE.connectedSeeds[0]?.url;
+
+    await postToSeed(seedUrl, "/api/peer/respond", {
+      peer_id: STATE.peerId,
+      call_id: ev.call_id,
+      action: "reject"
+    });
+
+    addSystemMessage(`Rejected request from ${ev.from}`);
+    STATE.incomingCall = null;
+    renderIncomingBar();
+    setStatus("idStatus", "Request rejected", "warn");
+  } catch {
+    setStatus("idStatus", "Could not reject", "err");
+  }
+}
+
+async function hangup(){
+  try {
+    if (!STATE.activeCallId && !STATE.pc) {
+      setStatus("idStatus", "No active session", "warn");
+      return;
+    }
+
+    try {
+      if (STATE.activeCallId) {
+        await signalSeedRequest("/api/peer/hangup", {
+          peer_id: STATE.peerId,
+          call_id: STATE.activeCallId,
+          reason: "user_hangup"
+        }, STATE.activeSeedUrl);
+      }
+    } catch {}
+
+    await stopPc(true);
+    await restartSessionAfterCallEnd();
+    setStatus("idStatus", "Disconnected", "warn");
+    addSystemMessage("Session ended");
+  } catch {
+    setStatus("idStatus", "Could not disconnect", "err");
+  }
+}
+
+function renderIncomingBar(){
+  const bar = $("incomingBar");
+  if (!STATE.incomingCall){
+    bar.classList.remove("show");
+    return;
+  }
+  const from = STATE.incomingCall.from;
+  $("incomingText").textContent = `Incoming request from ${from}`;
+  bar.classList.add("show");
+}
+
+async function sendSignal(callId, signalType, payload){
+  await signalSeedRequest("/api/peer/signal", {
+    peer_id: STATE.peerId,
+    call_id: callId,
+    signal_type: signalType,
+    payload
+  }, STATE.activeSeedUrl);
+}
+
+async function handleEvent(ev){
+  const t = ev.type;
+
+  if (t === "incoming_call") {
+    STATE.incomingCall = ev;
+    renderIncomingBar();
+    setStatus("idStatus", "Incoming request", "warn");
+    addSystemMessage(`Incoming request from ${ev.from}`);
+    return;
+  }
+
+  if (t === "call_outgoing") {
+    STATE.activeCallId = ev.call_id;
+    STATE.activePeer = ev.to;
+    STATE.activeSeedUrl = ev.__seed_url || STATE.activeSeedUrl;
+    STATE.sessionMode = "connecting";
+    updateHeaderPills();
+    return;
+  }
+
+  if (t === "call_response") {
+    if (ev.action === "accept") {
+      STATE.activeSeedUrl = ev.__seed_url || STATE.activeSeedUrl;
+      const mode = STATE.outgoingRequestedMode || "data";
+      STATE.sessionMode = mode;
+      updateHeaderPills();
+      setStatus("idStatus", mode === "media" ? "Connecting call…" : "Connecting chat…", "ok");
+
+      if (!STATE.pc) await createPc(false, ev.call_id, ev.from, mode);
+      const pc = STATE.pc;
+
+      STATE.makingOffer = true;
+      try {
+        const offer = await pc.createOffer({
+          offerToReceiveAudio: mode === "media",
+          offerToReceiveVideo: mode === "media"
+        });
+        await pc.setLocalDescription(offer);
+        await sendSignal(ev.call_id, "offer", pc.localDescription);
+      } finally {
+        STATE.makingOffer = false;
+      }
+      return;
+    }
+
+    if (ev.action === "reject") {
+      setStatus("idStatus", "Rejected", "warn");
+      addSystemMessage("Peer rejected the request");
+      await stopPc(true);
+      await restartSessionAfterCallEnd();
+      return;
+    }
+  }
+
+  if (t === "call_response_local") {
+    if (ev.action === "reject" || ev.action === "accept") {
+      STATE.incomingCall = null;
+      renderIncomingBar();
+    }
+    if (ev.action === "reject") {
+      await stopPc(true);
+      await restartSessionAfterCallEnd();
+    }
+    return;
+  }
+
+  if (t === "signal") {
+    await handleSignal(ev);
+    return;
+  }
+
+  if (t === "hangup" || t === "hangup_local") {
+    setStatus("idStatus", "Disconnected", "warn");
+    addSystemMessage("Session ended");
+    await stopPc(true);
+    await restartSessionAfterCallEnd();
+  }
+}
+
+/* =========================================================
+   MEDIA / WEBRTC / DATA CHANNELS
+========================================================= */
+async function enableMedia(){
+  try {
+    await ensureMedia();
+    setStatus("idStatus", "Camera ready", "ok");
+  } catch {
+    setStatus("idStatus", "Camera unavailable", "err");
+  }
+}
+
+async function ensureMedia(){
+  if (STATE.localStream) {
+    updateVideoHints();
+    return STATE.localStream;
+  }
+  if (!navigator.mediaDevices?.getUserMedia) throw new Error("unsupported");
+
+  const stream = await navigator.mediaDevices.getUserMedia({
+    audio: { echoCancellation:true, noiseSuppression:true, autoGainControl:true },
+    video: { width:{ideal:720}, height:{ideal:720}, facingMode:"user" }
+  });
+
+  STATE.localStream = stream;
+  $("localVideo").srcObject = stream;
+  await safePlay($("localVideo"));
+  updateVideoHints();
+  return stream;
+}
+
+async function createPc(polite, callId, peerId, mode="data"){
+  if (STATE.pc) return STATE.pc;
+
+  STATE.polite = !!polite;
+  STATE.pendingIce = [];
+  STATE.fileRecv = {};
+  STATE.sessionMode = mode;
+  updateHeaderPills();
+
+  const pc = new RTCPeerConnection(RTC_CONFIG);
+  STATE.pc = pc;
+
+  STATE.remoteStream = new MediaStream();
+  $("remoteVideo").srcObject = STATE.remoteStream;
+  updateVideoHints();
+
+  if (mode === "media") {
+    await ensureMedia();
+    for (const tr of (STATE.localStream?.getTracks() || [])) pc.addTrack(tr, STATE.localStream);
+  }
+
+  if (!polite) {
+    STATE.chatDc = pc.createDataChannel("chat", { ordered:true });
+    wireChatChannel(STATE.chatDc);
+
+    STATE.fileDc = pc.createDataChannel("file", { ordered:true });
+    wireFileChannel(STATE.fileDc);
+  }
+
+  pc.ondatachannel = (e) => {
+    if (e.channel.label === "chat") {
+      STATE.chatDc = e.channel;
+      wireChatChannel(STATE.chatDc);
+    } else if (e.channel.label === "file") {
+      STATE.fileDc = e.channel;
+      wireFileChannel(STATE.fileDc);
+    }
+  };
+
+  pc.ontrack = async (e) => {
+    if (e.streams && e.streams[0]) {
+      $("remoteVideo").srcObject = e.streams[0];
+    } else if (STATE.remoteStream) {
+      STATE.remoteStream.addTrack(e.track);
+      $("remoteVideo").srcObject = STATE.remoteStream;
+    }
+    updateVideoHints();
+    await safePlay($("remoteVideo"));
+  };
+
+  pc.onicecandidate = async (e) => {
+    if (!e.candidate || !STATE.activeCallId) return;
+    try { await sendSignal(STATE.activeCallId, "ice", e.candidate); } catch {}
+  };
+
+  pc.onconnectionstatechange = async () => {
+    if (pc.connectionState === "connected") {
+      STATE.sessionMode = mode;
+      updateHeaderPills();
+      setStatus("idStatus", mode === "media" ? "In call" : "Connected", "ok");
+      addSystemMessage(mode === "media" ? "Call connected" : "Chat connected");
+      updateVideoHints();
+      await safePlay($("remoteVideo"));
+    }
+
+    if (["failed","disconnected","closed"].includes(pc.connectionState)) {
+      setTimeout(async () => {
+        if (STATE.pc === pc && pc.connectionState !== "connected") {
+          await stopPc(true);
+          await restartSessionAfterCallEnd();
+          setStatus("idStatus", "Disconnected", "warn");
+          addSystemMessage("Connection lost");
+        }
+      }, 1200);
+    }
+  };
+
+  pc.oniceconnectionstatechange = () => {};
+  return pc;
+}
+
+function wireChatChannel(dc){
+  dc.onopen = () => {
+    addSystemMessage("Chat channel ready");
+  };
+  dc.onclose = () => {
+    addSystemMessage("Chat channel closed");
+  };
+  dc.onerror = () => {};
+
+  dc.onmessage = (e) => {
+    try {
+      const j = JSON.parse(e.data);
+      if (j?.type === "chat") {
+        const peer = STATE.peersById.get(STATE.activePeer) || { peer_id: STATE.activePeer, display_name: STATE.activePeer };
+        addChatEntry({
+          id: `m-${Date.now()}-${Math.random().toString(36).slice(2,8)}`,
+          kind: "chat",
+          role: "peer",
+          peer,
+          who: `${peer.peer_id}(${peer.display_name || peer.peer_id})`,
+          text: j.text || "",
+          ts: Number(j.ts) || Date.now()
+        });
+      }
+    } catch {}
+  };
+}
+
+function wireFileChannel(dc){
+  dc.binaryType = "arraybuffer";
+  dc.onopen = () => addSystemMessage("File sharing ready");
+  dc.onclose = () => {};
+  dc.onerror = () => {};
+
+  dc.onmessage = async (e) => {
+    if (typeof e.data === "string") {
+      let j;
+      try { j = JSON.parse(e.data); } catch { return; }
+
+      if (j.type === "file-meta") {
+        const msgId = `f-${Date.now()}-${Math.random().toString(36).slice(2,8)}`;
+        STATE.fileRecv[j.transfer_id] = {
+          meta: j,
+          chunks: [],
+          bytesReceived: 0,
+          msgId
+        };
+
+        const peer = STATE.peersById.get(STATE.activePeer) || { peer_id: STATE.activePeer, display_name: STATE.activePeer };
+        addChatEntry({
+          id: msgId,
+          kind: "file",
+          role: "peer",
+          peer,
+          who: `${peer.peer_id}(${peer.display_name || peer.peer_id})`,
+          ts: Date.now(),
+          file: {
+            name: j.name,
+            size: j.size,
+            mime: j.mime || "application/octet-stream",
+            state: "receiving…",
+            kept: true,
+            blob: null,
+            blobUrl: null
+          }
+        });
+        return;
+      }
+
+      if (j.type === "file-end") {
+        const rec = STATE.fileRecv[j.transfer_id];
+        if (!rec) return;
+        const blob = new Blob(rec.chunks, { type: rec.meta.mime || "application/octet-stream" });
+
+        const item = findChatEntryById(rec.msgId);
+        if (item?.file) {
+          item.file.blob = blob;
+          item.file.state = "received";
+        }
+        delete STATE.fileRecv[j.transfer_id];
+        renderChatHistory();
+        return;
+      }
+
+      return;
+    }
+
+    // binary chunk
+    const activeTransfers = Object.values(STATE.fileRecv);
+    if (!activeTransfers.length) return;
+    const rec = activeTransfers[activeTransfers.length - 1];
+
+    rec.chunks.push(e.data);
+    rec.bytesReceived += (e.data.byteLength || 0);
+
+    const item = findChatEntryById(rec.msgId);
+    if (item?.file && rec.meta?.size) {
+      const pct = Math.min(100, Math.floor((rec.bytesReceived / rec.meta.size) * 100));
+      item.file.state = `receiving… ${pct}%`;
+      if (pct === 100) item.file.state = "processing…";
+      renderChatHistory();
+    }
+  };
+}
+
+function sendChat(){
+  const txt = ($("chatText").value || "").trim();
+  if (!txt) return;
+
+  if (!STATE.chatDc || STATE.chatDc.readyState !== "open") {
+    setStatus("idStatus", "Connect first", "warn");
+    return;
+  }
+
+  try {
+    const payload = { type:"chat", text:txt, ts:Date.now() };
+    STATE.chatDc.send(JSON.stringify(payload));
+
+    addChatEntry({
+      id: `m-${Date.now()}-${Math.random().toString(36).slice(2,8)}`,
+      kind: "chat",
+      role: "me",
+      who: `${STATE.peerId}(${STATE.identity || STATE.peerId})`,
+      text: txt,
+      ts: payload.ts
+    });
+
+    $("chatText").value = "";
+  } catch {
+    setStatus("idStatus", "Could not send message", "err");
+  }
+}
+
+async function sendSelectedFile(){
+  try {
+    const f = $("fileInput").files?.[0];
+    if (!f) throw new Error("Select a file");
+    if (!STATE.fileDc || STATE.fileDc.readyState !== "open") throw new Error("Not connected");
+    if (STATE.fileSendBusy) throw new Error("Busy");
+
+    STATE.fileSendBusy = true;
+    const transferId = `${Date.now()}-${Math.random().toString(36).slice(2,8)}`;
+    const msgId = `f-${Date.now()}-${Math.random().toString(36).slice(2,8)}`;
+    const CHUNK = 16 * 1024;
+
+    addChatEntry({
+      id: msgId,
+      kind: "file",
+      role: "me",
+      who: `${STATE.peerId}(${STATE.identity || STATE.peerId})`,
+      ts: Date.now(),
+      file: {
+        name: f.name,
+        size: f.size,
+        mime: f.type || "application/octet-stream",
+        state: "sending… 0%",
+        kept: true,
+        blob: f,
+        blobUrl: null
+      }
+    });
+
+    STATE.fileDc.send(JSON.stringify({
+      type: "file-meta",
+      transfer_id: transferId,
+      name: f.name,
+      size: f.size,
+      mime: f.type || "application/octet-stream",
+      chunk_size: CHUNK
+    }));
+
+    let offset = 0;
+    while (offset < f.size) {
+      while (STATE.fileDc.bufferedAmount > 2 * 1024 * 1024) await sleep(50);
+      const chunk = await f.slice(offset, offset + CHUNK).arrayBuffer();
+      STATE.fileDc.send(chunk);
+      offset += chunk.byteLength;
+
+      const pct = Math.min(100, Math.floor((offset / f.size) * 100));
+      const item = findChatEntryById(msgId);
+      if (item?.file) {
+        item.file.state = `sending… ${pct}%`;
+        renderChatHistory();
+      }
+    }
+
+    STATE.fileDc.send(JSON.stringify({ type:"file-end", transfer_id: transferId }));
+
+    const item = findChatEntryById(msgId);
+    if (item?.file) {
+      item.file.state = "sent";
+      renderChatHistory();
+    }
+
+    $("fileInput").value = "";
+  } catch {
+    setStatus("idStatus", "Could not send file", "err");
+  } finally {
+    STATE.fileSendBusy = false;
+  }
+}
+
+async function handleSignal(ev){
+  const { call_id, signal_type, payload, from } = ev;
+
+  if (!STATE.pc) {
+    const activeMatch = STATE.activeCallId && STATE.activeCallId === call_id;
+    if (!activeMatch) return;
+    // If we don't know, assume data session until tracks appear
+    await createPc(false, call_id, from, STATE.sessionMode === "connecting" ? (STATE.outgoingRequestedMode || "data") : (STATE.sessionMode || "data"));
+  }
+
+  const pc = STATE.pc;
+  if (!pc) return;
+
+  if (signal_type === "offer") {
+    const offerCollision = STATE.makingOffer || pc.signalingState !== "stable";
+    const ignoreOffer = !STATE.polite && offerCollision;
+    if (ignoreOffer) return;
+
+    await pc.setRemoteDescription(new RTCSessionDescription(payload));
+    await flushPendingIce();
+
+    const answer = await pc.createAnswer();
+    await pc.setLocalDescription(answer);
+    await sendSignal(call_id, "answer", pc.localDescription);
+    return;
+  }
+
+  if (signal_type === "answer") {
+    await pc.setRemoteDescription(new RTCSessionDescription(payload));
+    await flushPendingIce();
+    return;
+  }
+
+  if (signal_type === "ice") {
+    if (!pc.remoteDescription) {
+      STATE.pendingIce.push(payload);
+    } else {
+      try { await pc.addIceCandidate(new RTCIceCandidate(payload)); } catch {}
+    }
+  }
+}
+
+async function flushPendingIce(){
+  if (!STATE.pc || !STATE.pc.remoteDescription) return;
+  const arr = [...STATE.pendingIce];
+  STATE.pendingIce = [];
+  for (const c of arr) {
+    try { await STATE.pc.addIceCandidate(new RTCIceCandidate(c)); } catch {}
+  }
+}
+
+async function stopPc(resetCallState=true){
+  try {
+    if (STATE.pc) {
+      try { STATE.pc.ontrack = null; } catch {}
+      try { STATE.pc.ondatachannel = null; } catch {}
+      try { STATE.pc.onicecandidate = null; } catch {}
+      try { STATE.pc.close(); } catch {}
+    }
+  } catch {}
+
+  STATE.pc = null;
+  STATE.chatDc = null;
+  STATE.fileDc = null;
+  STATE.pendingIce = [];
+  STATE.fileRecv = {};
+  STATE.fileSendBusy = false;
+  STATE.makingOffer = false;
+  STATE.polite = false;
+
+  if (STATE.remoteStream) {
+    try { STATE.remoteStream.getTracks().forEach(t => t.stop()); } catch {}
+  }
+  STATE.remoteStream = null;
+  $("remoteVideo").srcObject = null;
+
+  if (resetCallState) {
+    STATE.activeCallId = "";
+    STATE.activePeer = "";
+    STATE.activeSeedUrl = "";
+    STATE.incomingCall = null;
+    STATE.sessionMode = "idle";
+  }
+
+  renderIncomingBar();
+  updateHeaderPills();
+  updateVideoHints();
+}
+
+/* =========================================================
+   SESSION RESTART AFTER END
+========================================================= */
+async function restartSessionAfterCallEnd(){
+  if (!STATE.online) return;
+  try {
+    STATE.online = false;
+    stopHeartbeatLoop();
+    stopAllPollLoops();
+    await sleep(250);
+    STATE.online = true;
+    await startHeartbeatLoop();
+    startAllPollLoops();
+    setStatus("idStatus", `Online as ${STATE.identity}`, "ok");
+  } catch {
+    setStatus("idStatus", "Disconnected", "err");
+  }
+}
+
+/* =========================================================
+   BOOT
+========================================================= */
+async function boot(){
+  const continueBoot = await clearCachesOnceAndReload();
+  if (!continueBoot) return;
+
+  ensureIdentity();
+  updateHeaderPills();
+  renderChatHistory();
+  updateVideoHints();
+
+  if (!window.isSecureContext) {
+    setStatus("idStatus", "Use HTTPS for camera", "warn");
+  }
+
+  startSeedScanLoop();
+
+  try { await discoverSeeds(); } catch {}
+
+  await autoLogin(false);
+
+  if (STATE.networkTickTimer) clearInterval(STATE.networkTickTimer);
+  STATE.networkTickTimer = setInterval(async () => {
+    try {
+      const before = new Set(STATE.connectedSeeds.map(n => n.url));
+      await discoverSeeds();
+      const after = new Set(STATE.connectedSeeds.map(n => n.url));
+      const changed = before.size !== after.size || [...before].some(u => !after.has(u));
+      if (changed && STATE.online) {
+        startAllPollLoops();
+        await sendHeartbeatAll();
+      }
+    } catch {}
+  }, NETWORK_REFRESH_MS);
+
+  $("chatText").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") sendChat();
+  });
+
+  document.addEventListener("fullscreenchange", () => {});
+}
+
+window.addEventListener("beforeunload", () => {
+  stopHeartbeatLoop();
+  stopAllPollLoops();
+  stopSeedScanLoop();
+});
+
+boot();
+</script>
 </body>
 </html>
