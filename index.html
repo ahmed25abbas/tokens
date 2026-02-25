@@ -8,6 +8,7 @@
   <meta http-equiv="Pragma" content="no-cache" />
   <meta http-equiv="Expires" content="0" />
 
+  <!-- Optional: used to fetch GitHub token files without CORS pain -->
   <script src="https://js.puter.com/v2/"></script>
 
   <style>
@@ -621,6 +622,12 @@
 <script>
 /* =========================================================
    CONFIG / STATE
+   100% compatible with backend coord_node.py you pasted:
+   - /api/peer/heartbeat expects peer_uid + peer_name (+ known_nodes optional)
+   - server returns you.peer_key
+   - invites use caller_key/callee_key (peer_key values)
+   - respond/signal/hangup use peer_uid + call_id
+   - SSE: /api/peer/stream?peer_uid=...
 ========================================================= */
 
 const STARTUP_RELOAD_FLAG = "__p2p_peer_client_reloaded_once__";
@@ -708,7 +715,6 @@ const STATE = {
 ========================================================= */
 function $(id){ return document.getElementById(id); }
 function sleep(ms){ return new Promise(r => setTimeout(r, ms)); }
-
 function now(){ return Date.now(); }
 
 function setStatus(elId, msg, type="ok"){
@@ -749,7 +755,10 @@ async function fetchJson(url, opts={}){
   const r = await fetch(url, { cache:"no-store", redirect:"follow", ...opts });
   const ct = r.headers.get("content-type") || "";
   const body = ct.includes("application/json") ? await r.json() : await r.text();
-  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  if (!r.ok) {
+    const msg = (body && typeof body === "object" && body.error?.message) ? body.error.message : (typeof body === "string" ? body : "");
+    throw new Error(`HTTP ${r.status}${msg ? `: ${msg}` : ""}`);
+  }
   return body;
 }
 
@@ -902,8 +911,6 @@ function downloadPendingFile(id){
 
 /* =========================================================
    STORAGE / IDENTITY
-   - peerUid is PRIVATE and never shown
-   - peerName is visible
 ========================================================= */
 function getStoredIdentity(){
   try { return JSON.parse(localStorage.getItem("p2p_identity_v3") || "{}"); }
@@ -1171,15 +1178,25 @@ async function getFromSeed(seedUrl, path){
   return await fetchJson(noCacheUrl(seedUrl.replace(/\/+$/,"") + path));
 }
 
+/**
+ * IMPORTANT compatibility + bridging improvement:
+ * backend can bridge across seeds IF we send request to ANY reachable seed that knows route.
+ * We also want to allow preferredSeedUrl even if not currently "connectedSeeds".
+ */
 function seedCandidates(preferred){
   const out = [];
-  if (preferred) {
-    const p = STATE.connectedSeeds.find(s => s.url === preferred);
-    if (p) out.push(p.url);
-  }
+  const p = (preferred || "").toString().trim().replace(/\/+$/,"");
+  if (p && /^https?:\/\//i.test(p)) out.push(p);
+
   for (const s of STATE.connectedSeeds){
     if (!out.includes(s.url)) out.push(s.url);
   }
+
+  // last resort: hinted nodes we’ve seen
+  for (const u of Array.from(STATE.discoveredNodeUrls).slice(0, 20)){
+    if (!out.includes(u)) out.push(u);
+  }
+
   return out;
 }
 
@@ -1210,45 +1227,10 @@ async function sendHeartbeatToSeed(seed){
   });
 }
 
-function mergePeersFromSeed(seedUrl, peersArr){
-  if (!Array.isArray(peersArr)) return;
-  for (const p of peersArr){
-    const pk = String(p?.peer_key || "").trim();
-    const nm = String(p?.name || "").trim() || "Unknown";
-    if (!pk || pk === STATE.myPeerKey) continue;
-
-    const cur = STATE.peersByKey.get(pk);
-    const merged = {
-      peer_key: pk,
-      name: nm,
-      capabilities: p?.capabilities || {},
-      home_node_url: String(p?.home_node_url || "").trim(),
-      signaling_via_node: p?.signaling_via_node !== false,
-      last_seen_ts: Number(p?.last_seen_ts || 0),
-      sourceSeedUrl: seedUrl
-    };
-
-    if (!cur) STATE.peersByKey.set(pk, merged);
-    else {
-      // prefer fresher & keep best known home url
-      const better = (merged.last_seen_ts || 0) >= (cur.last_seen_ts || 0);
-      STATE.peersByKey.set(pk, {
-        ...cur,
-        ...merged,
-        name: better ? merged.name : cur.name,
-        home_node_url: merged.home_node_url || cur.home_node_url
-      });
-    }
-  }
-}
-
 async function sendHeartbeatAll(){
   if (!STATE.online || !STATE.connectedSeeds.length) return;
 
   const nextConnected = [];
-  const nextPeers = new Map();
-
-  // local merge buffer
   const tmpPeers = new Map();
 
   await Promise.all(STATE.connectedSeeds.map(async (seed) => {
@@ -1259,14 +1241,14 @@ async function sendHeartbeatAll(){
       // update "myPeerKey"
       if (j?.you?.peer_key) STATE.myPeerKey = String(j.you.peer_key);
 
+      // merge known_nodes hints
       mergeKnownNodesIntoSeeds(j?.known_nodes || []);
 
       const peers = Array.isArray(j?.peers) ? j.peers : [];
-      // temp map merge
       for (const p of peers){
         const pk = String(p?.peer_key || "").trim();
         if (!pk || pk === STATE.myPeerKey) continue;
-        const cur = tmpPeers.get(pk);
+
         const cand = {
           peer_key: pk,
           name: String(p?.name || "").trim() || "Unknown",
@@ -1276,6 +1258,8 @@ async function sendHeartbeatAll(){
           last_seen_ts: Number(p?.last_seen_ts || 0),
           sourceSeedUrl: seed.url
         };
+
+        const cur = tmpPeers.get(pk);
         if (!cur) tmpPeers.set(pk, cand);
         else tmpPeers.set(pk, {
           ...cur,
@@ -1285,7 +1269,6 @@ async function sendHeartbeatAll(){
           last_seen_ts: Math.max(cur.last_seen_ts||0, cand.last_seen_ts||0)
         });
       }
-
     } catch {}
   }));
 
@@ -1306,10 +1289,10 @@ async function sendHeartbeatAll(){
   renderPeers();
   updateHeaderPills();
 
-  // ensure event transports match current seeds
+  // keep event transports aligned
   if (STATE.online) {
-    startAllStreams();   // SSE first
-    startAllPollLoops(); // poll fallback stays alive
+    startAllStreams();
+    startAllPollLoops();
   }
 }
 
@@ -1375,7 +1358,7 @@ async function autoLogin(force=false){
 
     updateHeaderPills();
     addSystemMessage(`Online as ${STATE.peerName} (private uid hidden)`);
-  } catch {
+  } catch (e) {
     STATE.online = false;
     setStatus("idStatus", "Offline", "err");
   }
@@ -1403,7 +1386,7 @@ async function logoutAll(){
 }
 
 /* =========================================================
-   PEERS UI (show name, hide uid; peer_key is internal)
+   PEERS UI
 ========================================================= */
 function renderPeers(){
   const q = ($("peerSearch").value || "").trim().toLowerCase();
@@ -1451,8 +1434,7 @@ async function refreshPeersNow(){
 }
 
 /* =========================================================
-   EVENT TRANSPORTS: SSE first, poll always available
-   - We can open SSE to ALL seeds and dedup by event_id.
+   EVENT TRANSPORTS: SSE first, poll fallback
 ========================================================= */
 function startAllStreams(){
   stopAllStreams();
@@ -1479,7 +1461,6 @@ function startSeedStream(seedUrl){
         const j = JSON.parse(e.data || "{}");
         const events = Array.isArray(j?.events) ? j.events : [];
         for (const ev of events){
-          // Dedup across seeds/streams by server event_id
           if (STATE.seenEventIds.has(ev?.event_id)) continue;
           STATE.seenEventIds.add(ev?.event_id);
           ev.__seed_url = seedUrl;
@@ -1490,7 +1471,7 @@ function startSeedStream(seedUrl){
 
     es.addEventListener("ping", () => {});
     es.onerror = () => {
-      // keep poll loop as fallback; SSE may recover
+      // poll loop keeps working; SSE may recover
     };
   } catch {}
 }
@@ -1529,7 +1510,7 @@ function startSeedPollLoop(seedUrl){
 }
 
 /* =========================================================
-   CALL / CONNECT ACTIONS (v3 backend: invite uses peer_key)
+   CALL / CONNECT ACTIONS (backend uses peer_key)
 ========================================================= */
 async function connectSelectedData(){ await dialPeer("data"); }
 async function dialSelectedMedia(){ await dialPeer("media"); }
@@ -1541,13 +1522,11 @@ async function dialPeer(mode){
     if (!STATE.myPeerKey) throw new Error("no key yet");
     if (STATE.selectedPeerKey === STATE.myPeerKey) throw new Error("self");
     if (STATE.activeCallId) throw new Error("busy");
-    if (!STATE.connectedSeeds.length) throw new Error("no seeds");
 
     if (mode === "media") await ensureMedia();
 
     STATE.outgoingRequestedMode = mode;
 
-    // Prefer the peer's home seed/node if known, else best seed
     const targetPeer = STATE.peersByKey.get(STATE.selectedPeerKey);
     const preferred = targetPeer?.home_node_url || STATE.connectedSeeds[0]?.url;
 
@@ -1565,7 +1544,7 @@ async function dialPeer(mode){
 
     setStatus("idStatus", mode === "media" ? "Calling…" : "Connecting…", "ok");
     addSystemMessage(`${mode === "media" ? "Calling" : "Connecting to"} ${(targetPeer?.name || "peer")}`);
-  } catch {
+  } catch (e) {
     setStatus("idStatus", "Could not connect", "err");
   }
 }
@@ -1585,7 +1564,7 @@ async function acceptIncoming(mode="data"){
     });
 
     STATE.activeCallId = ev.call_id;
-    STATE.activePeerKey = ev.from;
+    STATE.activePeerKey = ev.from; // caller peer_key
     STATE.activeSeedUrl = seedUrl;
     STATE.sessionMode = mode;
     updateHeaderPills();
@@ -1596,7 +1575,7 @@ async function acceptIncoming(mode="data"){
 
     setStatus("idStatus", mode === "media" ? "Call accepted" : "Chat connected", "ok");
     addSystemMessage(`${mode === "media" ? "Call" : "Chat"} accepted`);
-  } catch {
+  } catch (e) {
     setStatus("idStatus", "Could not accept", "err");
   }
 }
@@ -1617,7 +1596,7 @@ async function rejectIncoming(){
     STATE.incomingCall = null;
     renderIncomingBar();
     setStatus("idStatus", "Request rejected", "warn");
-  } catch {
+  } catch (e) {
     setStatus("idStatus", "Could not reject", "err");
   }
 }
@@ -1643,7 +1622,7 @@ async function hangup(){
     await restartSessionAfterCallEnd();
     setStatus("idStatus", "Disconnected", "warn");
     addSystemMessage("Session ended");
-  } catch {
+  } catch (e) {
     setStatus("idStatus", "Could not disconnect", "err");
   }
 }
@@ -1673,7 +1652,7 @@ async function handleEvent(ev){
   const t = ev.type;
 
   if (t === "incoming_call") {
-    STATE.incomingCall = ev;
+    STATE.incomingCall = ev;     // {call_id, from, bridged?, origin_node_url?}
     renderIncomingBar();
     setStatus("idStatus", "Incoming request", "warn");
 
@@ -1684,7 +1663,7 @@ async function handleEvent(ev){
 
   if (t === "call_outgoing") {
     STATE.activeCallId = ev.call_id;
-    STATE.activePeerKey = ev.to;
+    STATE.activePeerKey = ev.to; // callee peer_key
     STATE.activeSeedUrl = ev.__seed_url || STATE.activeSeedUrl;
     STATE.sessionMode = "connecting";
     updateHeaderPills();
@@ -1857,7 +1836,6 @@ function wireChatChannel(dc){
     try {
       const j = JSON.parse(e.data);
 
-      // Chat ACK
       if (j?.type === "chat-ack" && j?.msg_id){
         const item = findChatEntryById(j.msg_id);
         if (item && item.kind === "chat" && item.role === "me"){
@@ -1884,7 +1862,6 @@ function wireChatChannel(dc){
           ts: Number(j.ts) || Date.now()
         });
 
-        // send delivery ACK back
         if (msgId){
           try { dc.send(JSON.stringify({ type:"chat-ack", msg_id: msgId, ts: Date.now() })); } catch {}
         }
@@ -1937,23 +1914,18 @@ function wireFileChannel(dc){
       let j;
       try { j = JSON.parse(e.data); } catch { return; }
 
-      // Sender receives ACK
       if (j?.type === "file-ack" && j?.transfer_id){
         const item = findChatEntryById(j.transfer_id);
         if (item?.file) { item.file.state = "delivered"; renderChatHistory(); }
         return;
       }
 
-      // Receiver meta
       if (j.type === "file-meta") {
         const tid = String(j.transfer_id || "");
         if (!tid) return;
-
-        // Dedup transfers (important if reconnection or duplicate control messages)
         if (STATE.seenTransferIds.has(tid)) return;
         STATE.seenTransferIds.add(tid);
 
-        // Use transfer_id as message id so ACKs can match reliably
         const msgId = tid;
 
         STATE.fileRecv[tid] = { meta: j, chunks: [], bytesReceived: 0, msgId };
@@ -1977,7 +1949,6 @@ function wireFileChannel(dc){
         return;
       }
 
-      // Receiver end
       if (j.type === "file-end") {
         const tid = String(j.transfer_id || "");
         const rec = STATE.fileRecv[tid];
@@ -1994,7 +1965,6 @@ function wireFileChannel(dc){
         delete STATE.fileRecv[tid];
         renderChatHistory();
 
-        // send ACK back to sender
         try { dc.send(JSON.stringify({ type:"file-ack", transfer_id: tid, ts: Date.now() })); } catch {}
         return;
       }
@@ -2002,11 +1972,9 @@ function wireFileChannel(dc){
       return;
     }
 
-    // binary chunk
     const activeTransfers = Object.values(STATE.fileRecv);
     if (!activeTransfers.length) return;
 
-    // newest active
     const rec = activeTransfers[activeTransfers.length - 1];
     rec.chunks.push(e.data);
     rec.bytesReceived += (e.data.byteLength || 0);
