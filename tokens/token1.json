@@ -2,9 +2,9 @@
   "v": 1,
   "node_id": "gw-c3f670f6-70e1-4e2f-92f5-3f3926e02b35",
   "role": "gateway",
-  "url": "https://fa5108dd3fe81f.lhr.life",
-  "updated_at": 1772070035,
-  "expires_at": 1772070335,
+  "url": "https://ecfc3cb71e9e22.lhr.life",
+  "updated_at": 1772070044,
+  "expires_at": 1772070344,
   "caps": [
     "sse",
     "poll",
