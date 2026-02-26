@@ -116,11 +116,6 @@
     button.danger{
       background:linear-gradient(90deg,#b91c1c,#ef4444);
     }
-    button.ghost{
-      background:transparent;
-      border:1px dashed rgba(255,255,255,.16);
-      box-shadow:none;
-    }
 
     .status{
       display:flex;
@@ -654,9 +649,21 @@ const FILE_SEND_THROTTLE_SLEEP_MS = 50 / 5; // 10ms
 // Download blob revoke delay (DIVIDED BY 5)
 const BLOB_REVOKE_MS = 30000 / 5; // 6000ms
 
+// ===== New: fast token scanning batches =====
+const TOKEN_BATCH_SIZE = 20;          // you requested 20 or less
+const HINTS_EXPAND_LIMIT = 60;        // max hints to attempt per expansion wave
+const HINTS_PARALLEL = 12;            // concurrent hello checks for hinted seeds
+
 // Internal repo (hidden from UI)
 const REPO_CFG = { owner: "ahmed25abbas", repo: "tokens", branch: "main" };
 const GITHUB_FETCH = { byToken: {} };
+
+// ===== New: dead URL ignore list =====
+// If a seed URL returns 503 (or repeated failures), we add it to a "dead until token changes" list.
+// We only skip it while the token still points to the same URL.
+const DEAD_URL_STORE_KEY = "p2p_dead_seed_urls_v1";       // { url: {status,lastSeenTs,reason} }
+const TOKEN_LAST_URL_STORE_KEY = "p2p_token_last_url_v1"; // { tokenName: lastUrlSeen }
+const DEAD_IGNORED_STATUS = new Set([503]);               // only auto-blacklist on 503 per your request
 
 // Dedup sizes
 const EVENT_DEDUP_MAX = 2000;
@@ -673,7 +680,7 @@ const STATE = {
   seedPollLoops: new Map(),
   seedStreams: new Map(), // seedUrl -> EventSource
 
-  discoveredNodeUrls: new Set(),
+  discoveredNodeUrls: new Set(), // our local seed knowledge base
 
   // Identity:
   peerUid: "",
@@ -715,7 +722,13 @@ const STATE = {
 
   chatHistory: [],
 
-  tokenScan: { running:false }
+  tokenScan: { running:false },
+
+  // new: bootstrap state
+  bootstrap: {
+    haveFirstSeed: false,
+    lazyScanEnabled: true
+  }
 };
 
 /* =========================================================
@@ -759,13 +772,37 @@ function noCacheUrl(url){
   return u.toString();
 }
 
-async function fetchJson(url, opts={}){
+// Simple concurrency limiter (no deps)
+async function runWithConcurrency(items, limit, fn){
+  const out = [];
+  let i = 0;
+  const workers = Array.from({length: Math.max(1, limit|0)}, async () => {
+    while (i < items.length){
+      const idx = i++;
+      try { out[idx] = await fn(items[idx], idx); }
+      catch (e) { out[idx] = { __err: e }; }
+    }
+  });
+  await Promise.all(workers);
+  return out;
+}
+
+// Fetch JSON with error details + status
+async function fetchJsonWithStatus(url, opts={}){
   const r = await fetch(url, { cache:"no-store", redirect:"follow", ...opts });
   const ct = r.headers.get("content-type") || "";
-  const body = ct.includes("application/json") ? await r.json() : await r.text();
-  if (!r.ok) {
+  const body = ct.includes("application/json") ? await r.json().catch(()=>null) : await r.text().catch(()=>null);
+  return { ok: r.ok, status: r.status, body, headers: r.headers };
+}
+
+async function fetchJson(url, opts={}){
+  const { ok, status, body } = await fetchJsonWithStatus(url, opts);
+  if (!ok) {
     const msg = (body && typeof body === "object" && body.error?.message) ? body.error.message : (typeof body === "string" ? body : "");
-    throw new Error(`HTTP ${r.status}${msg ? `: ${msg}` : ""}`);
+    const err = new Error(`HTTP ${status}${msg ? `: ${msg}` : ""}`);
+    err.__httpStatus = status;
+    err.__httpBody = body;
+    throw err;
   }
   return body;
 }
@@ -809,6 +846,51 @@ function updateMiniStats(){
   $("statPeers").textContent = String(STATE.peersByKey.size);
   $("seedChip").textContent = `Seeds: ${STATE.connectedSeeds.length}`;
   $("peerChip").textContent = `Peers: ${STATE.peersByKey.size}`;
+}
+
+/* =========================================================
+   Dead URL ignore list (token-aware)
+========================================================= */
+function loadDeadUrlMap(){
+  try { return JSON.parse(localStorage.getItem(DEAD_URL_STORE_KEY) || "{}"); }
+  catch { return {}; }
+}
+function saveDeadUrlMap(map){
+  try { localStorage.setItem(DEAD_URL_STORE_KEY, JSON.stringify(map)); } catch {}
+}
+function loadTokenLastUrlMap(){
+  try { return JSON.parse(localStorage.getItem(TOKEN_LAST_URL_STORE_KEY) || "{}"); }
+  catch { return {}; }
+}
+function saveTokenLastUrlMap(map){
+  try { localStorage.setItem(TOKEN_LAST_URL_STORE_KEY, JSON.stringify(map)); } catch {}
+}
+
+function markUrlDead(url, status, reason){
+  const u = (url || "").toString().trim().replace(/\/+$/,"");
+  if (!u) return;
+  const m = loadDeadUrlMap();
+  m[u] = { status: Number(status)||0, reason: String(reason||"dead"), lastSeenTs: Date.now() };
+  saveDeadUrlMap(m);
+}
+
+function isUrlDeadForToken(tokenName, url){
+  const u = (url || "").toString().trim().replace(/\/+$/,"");
+  if (!u || !tokenName) return false;
+  const dead = loadDeadUrlMap();
+  const tokLast = loadTokenLastUrlMap();
+  const lastUrlSeenForToken = tokLast[tokenName] || "";
+  // Only skip if:
+  // - url is marked dead AND
+  // - token hasn't changed away from this url since it was last seen
+  return !!dead[u] && lastUrlSeenForToken === u;
+}
+
+function updateTokenLastUrl(tokenName, url){
+  const u = (url || "").toString().trim().replace(/\/+$/,"");
+  const tokLast = loadTokenLastUrlMap();
+  tokLast[tokenName] = u;
+  saveTokenLastUrlMap(tokLast);
 }
 
 /* =========================================================
@@ -977,7 +1059,7 @@ async function clearCachesOnceAndReload(){
 }
 
 /* =========================================================
-   INTERNAL SEED DISCOVERY (GitHub tokens) + known_nodes gossip
+   Token parsing + Puter fetch (same as before)
 ========================================================= */
 function createSourceState(){ return { latestValue:"", lastChosenValue:"", previousValues:[] }; }
 function createTokenMeta(){
@@ -1084,30 +1166,20 @@ async function fetchTokenUrlPuterOnly(owner, repo, branch, tokenName){
   meta.lastReason = "puter_only";
   markSourceChosen(tokenName, url);
 
+  // track "token points to url"
+  updateTokenLastUrl(tokenName, url);
+
   return { tokenName, url, changed: !!prevEffective && prevEffective !== url };
 }
 
-async function helloSeed(url){
-  const base = String(url || "").replace(/\/+$/,"");
-  const t0 = performance.now();
-  const j = await fetchJson(noCacheUrl(base + "/api/node/hello"));
-  const latency = Math.round(performance.now() - t0);
-  return {
-    url: base,
-    latency_ms: latency,
-    cluster_node_id: j?.node?.cluster_node_id || null,
-    worker_id: j?.node?.worker_id || null,
-    peers_online: j?.node?.peers_online ?? null,
-    raw: j
-  };
-}
-
+/* =========================================================
+   Seed discovery helpers (FAST: ask first seed for its known nodes)
+========================================================= */
 function addDiscoveredSeedUrl(url){
   const u = String(url || "").trim().replace(/\/+$/,"");
   if (!/^https?:\/\//i.test(u)) return;
   STATE.discoveredNodeUrls.add(u);
 }
-
 function mergeKnownNodesIntoSeeds(knownNodes){
   if (!Array.isArray(knownNodes)) return;
   for (const n of knownNodes){
@@ -1117,51 +1189,214 @@ function mergeKnownNodesIntoSeeds(knownNodes){
   }
 }
 
-async function scanSeedsOnce(){
+async function helloSeed(url){
+  const base = String(url || "").replace(/\/+$/,"");
+  const t0 = performance.now();
+  try{
+    const j = await fetchJson(noCacheUrl(base + "/api/node/hello"));
+    const latency = Math.round(performance.now() - t0);
+    return {
+      ok: true,
+      url: base,
+      latency_ms: latency,
+      cluster_node_id: j?.node?.cluster_node_id || null,
+      worker_id: j?.node?.worker_id || null,
+      peers_online: j?.node?.peers_online ?? null,
+      raw: j
+    };
+  } catch (e){
+    const latency = Math.round(performance.now() - t0);
+    const status = e?.__httpStatus || 0;
+    // If 503, blacklist this URL as dead (token-aware)
+    if (DEAD_IGNORED_STATUS.has(status)) {
+      markUrlDead(base, status, "http_503");
+    }
+    return { ok:false, url: base, latency_ms: latency, err: String(e?.message || e), status };
+  }
+}
+
+// Ask a seed for all known nodes ASAP (expedite search process).
+// Uses /api/node/status which returns known_nodes list + cluster workers.
+async function fetchSeedKnownNodes(seedUrl){
+  const base = String(seedUrl || "").replace(/\/+$/,"");
+  const out = new Set();
+  try{
+    const j = await fetchJson(noCacheUrl(base + "/api/node/status"));
+    const known = Array.isArray(j?.known_nodes) ? j.known_nodes : [];
+    for (const n of known){
+      const u = String(n?.url || "").trim().replace(/\/+$/,"");
+      if (/^https?:\/\//i.test(u)) out.add(u);
+    }
+    const clusterWorkers = Array.isArray(j?.cluster?.workers) ? j.cluster.workers : [];
+    for (const w of clusterWorkers){
+      const u = String(w?.public_url || "").trim().replace(/\/+$/,"");
+      if (/^https?:\/\//i.test(u)) out.add(u);
+    }
+  } catch {}
+  return Array.from(out);
+}
+
+// Expand using "push" effect: from each connected seed, ask for known nodes.
+// Then try them quickly (limited + parallel).
+async function expandSeedsFromConnectedSeeds(reason="bootstrap"){
+  const seeds = STATE.connectedSeeds.map(s => s.url).filter(Boolean);
+  const allHints = new Set();
+
+  const hintLists = await Promise.all(seeds.map(s => fetchSeedKnownNodes(s)));
+  for (const arr of hintLists){
+    for (const u of arr) allHints.add(u);
+  }
+
+  // Also include what we already have in discoveredNodeUrls (peer hints)
+  for (const u of STATE.discoveredNodeUrls) allHints.add(u);
+
+  const hints = Array.from(allHints)
+    .map(u => u.replace(/\/+$/,""))
+    .filter(u => /^https?:\/\//i.test(u))
+    .filter(u => !STATE.connectedSeeds.some(s => s.url === u))
+    .slice(0, HINTS_EXPAND_LIMIT);
+
+  if (!hints.length) return [];
+
+  addSystemMessage(`[${reason}] got ${hints.length} seed hint(s) from active seed(s)`);
+
+  // Probe hints with concurrency limit
+  const results = await runWithConcurrency(hints, HINTS_PARALLEL, async (u) => await helloSeed(u));
+  const okOnes = results.filter(r => r && r.ok);
+
+  // Add discovered
+  for (const r of okOnes){
+    addDiscoveredSeedUrl(r.url);
+  }
+
+  return okOnes;
+}
+
+/* =========================================================
+   Faster token scan: batch 20 at a time (parallel within batch)
+   + respects dead ignore list (token-aware)
+========================================================= */
+async function scanSeedsOnceFastBatches(){
   const { owner, repo, branch } = REPO_CFG;
   const found = [];
+
   let missStreak = 0;
 
-  for (let i = 1; i <= TOKEN_SCAN_MAX; i++) {
-    const tokenName = `token${i}`;
-    try {
-      const tok = await fetchTokenUrlPuterOnly(owner, repo, branch, tokenName);
-      const hello = await helloSeed(tok.url);
-      found.push({ token_name: tokenName, token_index: i, ...hello });
-      missStreak = 0;
-    } catch {
-      missStreak++;
-      if (missStreak >= TOKEN_SCAN_STOP_AFTER_CONSECUTIVE_MISSES) break;
+  for (let start = 1; start <= TOKEN_SCAN_MAX; start += TOKEN_BATCH_SIZE) {
+    const batchIdx = [];
+    for (let i = start; i < start + TOKEN_BATCH_SIZE && i <= TOKEN_SCAN_MAX; i++) batchIdx.push(i);
+
+    // 1) fetch tokens concurrently
+    const tokenNames = batchIdx.map(i => `token${i}`);
+
+    const tokResults = await Promise.allSettled(tokenNames.map(async (tn) => {
+      try {
+        const tok = await fetchTokenUrlPuterOnly(owner, repo, branch, tn);
+        return tok;
+      } catch (e) {
+        return { tokenName: tn, url: "", __err: true, err: e };
+      }
+    }));
+
+    // 2) hello check concurrently (but skip dead urls for unchanged tokens)
+    const urlsToHello = [];
+    const urlMeta = []; // keep tokenName
+    for (const r of tokResults){
+      const v = r.status === "fulfilled" ? r.value : (r.value || {});
+      const tokenName = v?.tokenName || "";
+      const url = (v?.url || "").toString().trim().replace(/\/+$/,"");
+      if (!url || !tokenName) continue;
+
+      if (isUrlDeadForToken(tokenName, url)) {
+        continue; // skip until token changes
+      }
+      urlsToHello.push(url);
+      urlMeta.push({ tokenName, url });
+    }
+
+    const helloRes = await Promise.allSettled(urlsToHello.map(async (u) => await helloSeed(u)));
+
+    // Build map url->hello result
+    const helloMap = new Map();
+    for (const hr of helloRes){
+      const v = hr.status === "fulfilled" ? hr.value : hr.value;
+      if (v?.url) helloMap.set(v.url, v);
+    }
+
+    // 3) Process in token order to keep missStreak logic meaningful
+    for (let k = 0; k < tokenNames.length; k++){
+      const tn = tokenNames[k];
+      const tok = tokResults[k].status === "fulfilled" ? tokResults[k].value : null;
+      const url = (tok?.url || "").toString().trim().replace(/\/+$/,"");
+
+      if (!tok || !url) {
+        missStreak++;
+      } else {
+        // If token points to an ignored dead url (unchanged), count as miss
+        if (isUrlDeadForToken(tn, url)) {
+          missStreak++;
+        } else {
+          const h = helloMap.get(url);
+          if (h && h.ok) {
+            found.push({ token_name: tn, token_index: parseInt(tn.replace("token",""),10) || 0, ...h });
+            missStreak = 0;
+
+            // As soon as we get the FIRST active seed: expedite via seed-known-nodes push
+            if (!STATE.bootstrap.haveFirstSeed) {
+              STATE.bootstrap.haveFirstSeed = true;
+              addSystemMessage(`[bootstrap] first live seed found: ${h.url}`);
+              addDiscoveredSeedUrl(h.url);
+              // Immediately connect to it (as a seed candidate)
+              // (connectedSeeds is set later in discoverSeeds())
+            }
+          } else {
+            // If hello failed and was 503, helloSeed already marked URL dead.
+            // Count as miss.
+            missStreak++;
+          }
+        }
+      }
+
+      if (missStreak >= TOKEN_SCAN_STOP_AFTER_CONSECUTIVE_MISSES) {
+        break;
+      }
+    }
+
+    if (missStreak >= TOKEN_SCAN_STOP_AFTER_CONSECUTIVE_MISSES) {
+      break;
     }
   }
+
   return found;
 }
 
 async function discoverSeeds(){
-  const results = await scanSeedsOnce();
+  // 1) Fast: token batches -> get some live seeds
+  const results = await scanSeedsOnceFastBatches();
 
-  // Also try hinted nodes from known_nodes gossip
+  // 2) Also try hinted nodes we already know (from earlier pushes / heartbeats)
   const hintedUrls = Array.from(STATE.discoveredNodeUrls);
   const hintedHello = [];
-  for (const u of hintedUrls){
-    try {
-      const hello = await helloSeed(u);
-      hintedHello.push({ token_name: "hint", token_index: 0, ...hello });
-    } catch {}
+  if (hintedUrls.length) {
+    const limited = hintedUrls.slice(0, HINTS_EXPAND_LIMIT);
+    const res = await runWithConcurrency(limited, HINTS_PARALLEL, async (u) => await helloSeed(u));
+    for (const h of res) if (h && h.ok) hintedHello.push({ token_name: "hint", token_index: 0, ...h });
   }
 
   const all = [...results, ...hintedHello];
+
+  // dedup by (cluster_node_id, worker_id) if present; else by url
   const dedup = new Map();
-  for (const n of all.sort((a,b)=>a.latency_ms-b.latency_ms)) {
+  for (const n of all.sort((a,b)=> (a.latency_ms||999999) - (b.latency_ms||999999))) {
     const key = (n.cluster_node_id && n.worker_id)
       ? `cw:${n.cluster_node_id}:${n.worker_id}`
       : `url:${n.url}`;
     if (!dedup.has(key)) dedup.set(key, n);
   }
 
-  const unique = Array.from(dedup.values()).sort((a,b)=>a.latency_ms-b.latency_ms);
+  const unique = Array.from(dedup.values()).sort((a,b)=> (a.latency_ms||999999) - (b.latency_ms||999999));
   STATE.seeds = unique;
-  STATE.connectedSeeds = unique.slice(0, MAX_CONNECTED_SEEDS);
+  STATE.connectedSeeds = unique.slice(0, MAX_CONNECTED_SEEDS).map(s => ({ url: s.url, latency_ms: s.latency_ms }));
 
   for (const s of STATE.connectedSeeds) addDiscoveredSeedUrl(s.url);
 
@@ -1170,6 +1405,35 @@ async function discoverSeeds(){
     STATE.connectedSeeds.length ? `Connected to ${STATE.connectedSeeds.length} seed(s)` : "Disconnected",
     STATE.connectedSeeds.length ? "ok" : "warn"
   );
+
+  // 3) NEW: As soon as we have at least 1 seed, ask it for its known nodes and expand quickly.
+  if (STATE.connectedSeeds.length) {
+    // Do one aggressive expansion wave immediately.
+    const expanded = await expandSeedsFromConnectedSeeds("seed_push");
+    // Merge expanded into seeds list right away (without waiting for next discovery)
+    for (const e of expanded) {
+      // add to seeds list if not present
+      if (!STATE.seeds.some(s => s.url === e.url)) {
+        STATE.seeds.push({ token_name: "push", token_index: 0, ...e });
+      }
+    }
+    // Recompute connectedSeeds after expansion
+    const dedup2 = new Map();
+    for (const n of STATE.seeds.sort((a,b)=> (a.latency_ms||999999) - (b.latency_ms||999999))) {
+      const key = (n.cluster_node_id && n.worker_id)
+        ? `cw:${n.cluster_node_id}:${n.worker_id}`
+        : `url:${n.url}`;
+      if (!dedup2.has(key)) dedup2.set(key, n);
+    }
+    STATE.seeds = Array.from(dedup2.values()).sort((a,b)=> (a.latency_ms||999999) - (b.latency_ms||999999));
+    STATE.connectedSeeds = STATE.seeds.slice(0, MAX_CONNECTED_SEEDS).map(s => ({ url: s.url, latency_ms: s.latency_ms }));
+
+    updateMiniStats();
+    setStatus("netStatus",
+      STATE.connectedSeeds.length ? `Connected to ${STATE.connectedSeeds.length} seed(s)` : "Disconnected",
+      STATE.connectedSeeds.length ? "ok" : "warn"
+    );
+  }
 }
 
 /* =========================================================
@@ -1195,7 +1459,8 @@ function seedCandidates(preferred){
     if (!out.includes(s.url)) out.push(s.url);
   }
 
-  for (const u of Array.from(STATE.discoveredNodeUrls).slice(0, 20)){
+  // Also include what we discovered from seed pushes (fast path)
+  for (const u of Array.from(STATE.discoveredNodeUrls).slice(0, 50)){
     if (!out.includes(u)) out.push(u);
   }
 
@@ -1216,9 +1481,11 @@ async function requestWithFailover(method, path, body, preferredSeedUrl){
 
 /* =========================================================
    HEARTBEAT / PEERS LIST
+   + NEW: during heartbeat we already receive known_nodes,
+     which acts like continuous "push" of other seeds.
 ========================================================= */
 async function sendHeartbeatToSeed(seed){
-  const known_nodes = Array.from(STATE.discoveredNodeUrls).slice(0, 80).map(url => ({ url }));
+  const known_nodes = Array.from(STATE.discoveredNodeUrls).slice(0, 120).map(url => ({ url }));
   return await postToSeed(seed.url, "/api/peer/heartbeat", {
     peer_uid: STATE.peerUid,
     peer_name: STATE.peerName,
@@ -1241,6 +1508,8 @@ async function sendHeartbeatAll(){
       nextConnected.push(seed);
 
       if (j?.you?.peer_key) STATE.myPeerKey = String(j.you.peer_key);
+
+      // This is the "seed pushes other seeds" part (continuous)
       mergeKnownNodesIntoSeeds(j?.known_nodes || []);
 
       const peers = Array.isArray(j?.peers) ? j.peers : [];
@@ -1334,8 +1603,17 @@ async function autoLogin(force=false){
   try {
     ensureIdentity();
 
+    // 1) FAST bootstrap: find first seed quickly (token batches)
     if (!STATE.connectedSeeds.length || force) {
+      addSystemMessage("[bootstrap] searching for first live seed…");
       await discoverSeeds();
+    }
+
+    // 2) As soon as we have at least 1 seed, do an extra push-expansion wave (fast & reliable)
+    if (STATE.connectedSeeds.length) {
+      await expandSeedsFromConnectedSeeds("bootstrap_expand");
+      // After expansion, we keep lazy scanning on (your requirement)
+      STATE.bootstrap.lazyScanEnabled = true;
     }
 
     STATE.online = true;
@@ -2165,6 +2443,8 @@ async function restartSessionAfterCallEnd(){
 /* =========================================================
    BOOT
 ========================================================= */
+// Lazy scanning loop (now “smarter”): once we have seeds, it still runs,
+// but seed push + ignore list reduces wasted work.
 async function startSeedScanLoop(){
   if (STATE.tokenScan.running) return;
   STATE.tokenScan.running = true;
@@ -2172,7 +2452,16 @@ async function startSeedScanLoop(){
   (async () => {
     while (STATE.tokenScan.running) {
       try {
-        await discoverSeeds();
+        // Only run lazy scan if enabled
+        if (STATE.bootstrap.lazyScanEnabled) {
+          await discoverSeeds();
+        }
+
+        // Fast: ask active seeds for more known nodes periodically
+        if (STATE.connectedSeeds.length) {
+          await expandSeedsFromConnectedSeeds("periodic_push");
+        }
+
         if (STATE.online) {
           startAllStreams();
           startAllPollLoops();
