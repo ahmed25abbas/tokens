@@ -622,25 +622,37 @@
 <script>
 /* =========================================================
    CONFIG / STATE
-   100% compatible with backend coord_node.py you pasted:
-   - /api/peer/heartbeat expects peer_uid + peer_name (+ known_nodes optional)
-   - server returns you.peer_key
-   - invites use caller_key/callee_key (peer_key values)
-   - respond/signal/hangup use peer_uid + call_id
-   - SSE: /api/peer/stream?peer_uid=...
 ========================================================= */
 
 const STARTUP_RELOAD_FLAG = "__p2p_peer_client_reloaded_once__";
 
-// Fast network reflection
-const HEARTBEAT_MS = 3000;
-const NETWORK_REFRESH_MS = 12000;
+// ===== Timers / intervals (DIVIDED BY 5) =====
+const HEARTBEAT_MS = 3000 / 5;          // 600ms
+const NETWORK_REFRESH_MS = 12000 / 5;   // 2400ms
 const MAX_CONNECTED_SEEDS = 10;
 
 // Token scan discovery
 const TOKEN_SCAN_MAX = 999;
 const TOKEN_SCAN_STOP_AFTER_CONSECUTIVE_MISSES = 10;
-const TOKEN_SCAN_BACKOFF_MS = 9000;
+const TOKEN_SCAN_BACKOFF_MS = 9000 / 5; // 1800ms
+
+// Poll / backoff sleeps (DIVIDED BY 5)
+const POLL_TIMEOUT_S = 20 / 5;          // 4 seconds
+const POLL_OFFLINE_SLEEP_MS = 500 / 5;  // 100ms
+const POLL_ERROR_SLEEP_MS = 700 / 5;    // 140ms
+
+// ICE refresh (DIVIDED BY 5)
+const ICE_REFRESH_MS = 20000 / 5;       // 4000ms
+
+// Reconnect grace (DIVIDED BY 5)
+const RESTART_SESSION_DELAY_MS = 250 / 5; // 50ms
+const PC_FAIL_GRACE_MS = 1200 / 5;        // 240ms
+
+// File send throttle sleep (DIVIDED BY 5)
+const FILE_SEND_THROTTLE_SLEEP_MS = 50 / 5; // 10ms
+
+// Download blob revoke delay (DIVIDED BY 5)
+const BLOB_REVOKE_MS = 30000 / 5; // 6000ms
 
 // Internal repo (hidden from UI)
 const REPO_CFG = { owner: "ahmed25abbas", repo: "tokens", branch: "main" };
@@ -664,21 +676,19 @@ const STATE = {
   discoveredNodeUrls: new Set(),
 
   // Identity:
-  peerUid: "",       // private, stable (stored locally)
-  peerName: "",      // visible name
-  myPeerKey: "",     // server-derived opaque key (uid:name)
+  peerUid: "",
+  peerName: "",
+  myPeerKey: "",
   online: false,
 
-  // Peers (addressed by peer_key)
-  peersByKey: new Map(), // peer_key -> {peer_key,name,capabilities,home_node_url,signaling_via_node,last_seen_ts,sourceSeedUrl}
-
+  peersByKey: new Map(),
   selectedPeerKey: "",
 
   incomingCall: null,
   activeCallId: "",
   activePeerKey: "",
   activeSeedUrl: "",
-  sessionMode: "idle", // idle | connecting | data | media
+  sessionMode: "idle",
   outgoingRequestedMode: "data",
 
   heartbeatTimer: null,
@@ -696,15 +706,13 @@ const STATE = {
   polite: false,
   pendingIce: [],
 
-  fileRecv: {}, // transfer_id -> {meta,chunks,bytesReceived,msgId}
+  fileRecv: {},
   fileSendBusy: false,
 
-  // Dedup sets
   seenEventIds: new LruSet(EVENT_DEDUP_MAX),
   seenMsgIds: new LruSet(MSG_DEDUP_MAX),
   seenTransferIds: new LruSet(MSG_DEDUP_MAX),
 
-  // Chat timeline
   chatHistory: [],
 
   tokenScan: { running:false }
@@ -904,7 +912,7 @@ function downloadPendingFile(id){
   a.href = URL.createObjectURL(f.blob);
   a.download = f.name || "file";
   a.click();
-  setTimeout(()=> URL.revokeObjectURL(a.href), 30000);
+  setTimeout(()=> URL.revokeObjectURL(a.href), BLOB_REVOKE_MS);
   f.state = "downloaded";
   renderChatHistory();
 }
@@ -1178,11 +1186,6 @@ async function getFromSeed(seedUrl, path){
   return await fetchJson(noCacheUrl(seedUrl.replace(/\/+$/,"") + path));
 }
 
-/**
- * IMPORTANT compatibility + bridging improvement:
- * backend can bridge across seeds IF we send request to ANY reachable seed that knows route.
- * We also want to allow preferredSeedUrl even if not currently "connectedSeeds".
- */
 function seedCandidates(preferred){
   const out = [];
   const p = (preferred || "").toString().trim().replace(/\/+$/,"");
@@ -1192,7 +1195,6 @@ function seedCandidates(preferred){
     if (!out.includes(s.url)) out.push(s.url);
   }
 
-  // last resort: hinted nodes we’ve seen
   for (const u of Array.from(STATE.discoveredNodeUrls).slice(0, 20)){
     if (!out.includes(u)) out.push(u);
   }
@@ -1238,10 +1240,7 @@ async function sendHeartbeatAll(){
       const j = await sendHeartbeatToSeed(seed);
       nextConnected.push(seed);
 
-      // update "myPeerKey"
       if (j?.you?.peer_key) STATE.myPeerKey = String(j.you.peer_key);
-
-      // merge known_nodes hints
       mergeKnownNodesIntoSeeds(j?.known_nodes || []);
 
       const peers = Array.isArray(j?.peers) ? j.peers : [];
@@ -1280,7 +1279,6 @@ async function sendHeartbeatAll(){
   STATE.connectedSeeds = nextConnected;
   for (const s of nextConnected) addDiscoveredSeedUrl(s.url);
 
-  // keep selection if still exists
   const oldSel = STATE.selectedPeerKey;
   STATE.peersByKey = tmpPeers;
   if (oldSel && !STATE.peersByKey.has(oldSel)) STATE.selectedPeerKey = "";
@@ -1289,7 +1287,6 @@ async function sendHeartbeatAll(){
   renderPeers();
   updateHeaderPills();
 
-  // keep event transports aligned
   if (STATE.online) {
     startAllStreams();
     startAllPollLoops();
@@ -1323,7 +1320,7 @@ async function refreshIceConfig(){
 function startIceLoop(){
   if (STATE.iceTickTimer) clearInterval(STATE.iceTickTimer);
   refreshIceConfig();
-  STATE.iceTickTimer = setInterval(refreshIceConfig, 20000);
+  STATE.iceTickTimer = setInterval(refreshIceConfig, ICE_REFRESH_MS);
 }
 function stopIceLoop(){
   if (STATE.iceTickTimer) clearInterval(STATE.iceTickTimer);
@@ -1492,9 +1489,9 @@ function startSeedPollLoop(seedUrl){
 
   (async () => {
     while (ctrl.running) {
-      if (!STATE.online) { await sleep(500); continue; }
+      if (!STATE.online) { await sleep(POLL_OFFLINE_SLEEP_MS); continue; }
       try {
-        const j = await getFromSeed(seedUrl, `/api/peer/poll?peer_uid=${encodeURIComponent(STATE.peerUid)}&timeout=20`);
+        const j = await getFromSeed(seedUrl, `/api/peer/poll?peer_uid=${encodeURIComponent(STATE.peerUid)}&timeout=${encodeURIComponent(POLL_TIMEOUT_S)}`);
         const events = Array.isArray(j?.events) ? j.events : [];
         for (const ev of events) {
           if (STATE.seenEventIds.has(ev?.event_id)) continue;
@@ -1503,7 +1500,7 @@ function startSeedPollLoop(seedUrl){
           await handleEvent(ev);
         }
       } catch {
-        await sleep(700);
+        await sleep(POLL_ERROR_SLEEP_MS);
       }
     }
   })();
@@ -1564,7 +1561,7 @@ async function acceptIncoming(mode="data"){
     });
 
     STATE.activeCallId = ev.call_id;
-    STATE.activePeerKey = ev.from; // caller peer_key
+    STATE.activePeerKey = ev.from;
     STATE.activeSeedUrl = seedUrl;
     STATE.sessionMode = mode;
     updateHeaderPills();
@@ -1652,7 +1649,7 @@ async function handleEvent(ev){
   const t = ev.type;
 
   if (t === "incoming_call") {
-    STATE.incomingCall = ev;     // {call_id, from, bridged?, origin_node_url?}
+    STATE.incomingCall = ev;
     renderIncomingBar();
     setStatus("idStatus", "Incoming request", "warn");
 
@@ -1663,7 +1660,7 @@ async function handleEvent(ev){
 
   if (t === "call_outgoing") {
     STATE.activeCallId = ev.call_id;
-    STATE.activePeerKey = ev.to; // callee peer_key
+    STATE.activePeerKey = ev.to;
     STATE.activeSeedUrl = ev.__seed_url || STATE.activeSeedUrl;
     STATE.sessionMode = "connecting";
     updateHeaderPills();
@@ -1817,7 +1814,7 @@ async function createPc(polite, callId, peerKey, mode="data"){
           setStatus("idStatus", "Disconnected", "warn");
           addSystemMessage("Connection lost");
         }
-      }, 1200);
+      }, PC_FAIL_GRACE_MS);
     }
   };
 
@@ -2027,7 +2024,7 @@ async function sendSelectedFile(){
 
     let offset = 0;
     while (offset < f.size) {
-      while (STATE.fileDc.bufferedAmount > 2 * 1024 * 1024) await sleep(50);
+      while (STATE.fileDc.bufferedAmount > 2 * 1024 * 1024) await sleep(FILE_SEND_THROTTLE_SLEEP_MS);
       const chunk = await f.slice(offset, offset + CHUNK).arrayBuffer();
       STATE.fileDc.send(chunk);
       offset += chunk.byteLength;
@@ -2154,7 +2151,7 @@ async function restartSessionAfterCallEnd(){
     stopHeartbeatLoop();
     stopAllStreams();
     stopAllPollLoops();
-    await sleep(250);
+    await sleep(RESTART_SESSION_DELAY_MS);
     STATE.online = true;
     await startHeartbeatLoop();
     startAllStreams();
