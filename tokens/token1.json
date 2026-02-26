@@ -3,8 +3,8 @@
   "node_id": "gw-c3f670f6-70e1-4e2f-92f5-3f3926e02b35",
   "role": "gateway",
   "url": "https://56c7b77ab8fcc4.lhr.life",
-  "updated_at": 1772069725,
-  "expires_at": 1772070025,
+  "updated_at": 1772069786,
+  "expires_at": 1772070086,
   "caps": [
     "sse",
     "poll",
